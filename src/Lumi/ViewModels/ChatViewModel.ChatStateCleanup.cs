@@ -1056,6 +1056,7 @@ public partial class ChatViewModel
         McpSessionPlan plan,
         PendingMcpProxyPlanTracker? pendingPlan,
         Action? beforeAttach = null,
+        Action? afterAttach = null,
         Action? afterSubscribe = null)
     {
         Task? failedPublicationRelease = null;
@@ -1064,6 +1065,7 @@ public partial class ChatViewModel
         {
             beforeAttach?.Invoke();
             AttachMcpProxyLease(session, plan);
+            afterAttach?.Invoke();
             if (!SubscribeToSession(
                     session,
                     chat,
@@ -1141,6 +1143,16 @@ public partial class ChatViewModel
         if (_mcpProxyLeasesBySession.ContainsKey(session))
             TrackMcpProxyRelease(chatId, previousLease.ReleaseAsync());
         else
+            _mcpProxyLeasesBySession[session] = previousLease;
+    }
+
+    private void AdoptMcpProxyLeaseIfMissing(CopilotSession previousSession, CopilotSession session)
+    {
+        if (_mcpProxyLeasesBySession.ContainsKey(session))
+            return;
+
+        var previousLease = DetachMcpProxyLease(previousSession);
+        if (previousLease is not null)
             _mcpProxyLeasesBySession[session] = previousLease;
     }
 
