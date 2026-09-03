@@ -183,6 +183,7 @@ public partial class ChatViewModel
                 return true;
             }
 
+            await AwaitMcpToolCatalogRefreshAsync(chatId, token);
             await session.SendAsync(sendOptions, token);
             ClearPendingExternalSkillInjections();
             return true;
