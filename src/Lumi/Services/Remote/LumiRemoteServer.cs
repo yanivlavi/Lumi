@@ -18,6 +18,7 @@ using Lumi.Models;
 using Lumi.Remote.Protocol;
 using Lumi.Services;
 using Lumi.ViewModels;
+using StrataTheme.Controls;
 
 namespace Lumi.Services.Remote;
 
@@ -31,8 +32,8 @@ namespace Lumi.Services.Remote;
 /// <item>Pairing. A device must present a short-lived code that the desktop shows on screen, and
 /// exchanges it once for a long-lived random token.</item>
 /// <item>Token auth. Every non-handshake request needs that token, compared in constant time.</item>
-/// <item>Tailscale by default. Plain private-LAN callers are accepted only after the user explicitly
-/// enables unencrypted LAN access in Settings.</item>
+/// <item>User-selected transport. Tailscale sockets are verified against the local Tailscale
+/// interface; private-LAN callers are accepted only after the user selects Local Wi-Fi.</item>
 /// </list>
 /// </remarks>
 public sealed class LumiRemoteServer : IAsyncDisposable
@@ -43,12 +44,13 @@ public sealed class LumiRemoteServer : IAsyncDisposable
     internal static readonly TimeSpan MobileUploadRetention = TimeSpan.FromDays(7);
     internal static readonly TimeSpan CommandResultRetention = TimeSpan.FromMinutes(10);
     internal static readonly TimeSpan IncompleteCommandRetention = TimeSpan.FromMinutes(30);
-    internal static readonly TimeSpan TailscaleRefreshInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan NetworkChangeRefreshDelay = TimeSpan.FromMilliseconds(750);
 
     private readonly DataStore _dataStore;
     private readonly MainViewModel _main;
     private readonly RemoteCommandRouter _router;
     private readonly RemoteHttpListener _listener;
+    private readonly RemoteWebAppHandler _webApp;
     private readonly FileSearchService _fileSearchService = new();
     private readonly Func<IReadOnlySet<IPAddress>> _tailscaleAddressProvider;
     private readonly ConcurrentDictionary<Guid, RemoteEventClient> _streams = new();
@@ -60,11 +62,13 @@ public sealed class LumiRemoteServer : IAsyncDisposable
     private readonly SemaphoreSlim _uploadGate = new(1, 1);
     private readonly Dictionary<CommandDedupKey, CommandDedupEntry> _commandRequests = [];
     private IReadOnlySet<IPAddress> _tailscaleAddresses = new HashSet<IPAddress>();
+    private IPAddress? _selectedLocalNetworkAddress;
     private readonly SemaphoreSlim _networkPolicyGate = new(1, 1);
 
     private RemoteEventHub? _hub;
     private RemoteDiscoveryResponder? _discovery;
-    private Timer? _tailscaleRefreshTimer;
+    private Timer? _networkChangeRefreshTimer;
+    private bool _isWatchingNetworkChanges;
     private FileStream? _serverOwnershipLock;
     private readonly bool _ownsPersistentSecurityState;
     private string? _pairingCode;
@@ -112,6 +116,7 @@ public sealed class LumiRemoteServer : IAsyncDisposable
         _tailscaleAddressProvider = tailscaleAddressProvider;
         _router = new RemoteCommandRouter(dataStore, main);
         _listener = new RemoteHttpListener(HandleAsync, PreflightRequest);
+        _webApp = new RemoteWebAppHandler(RemoteWebAssetProvider.TryCreate());
         _ownsPersistentSecurityState = !dataStore.UsesPersistentStorage || TryAcquireServerOwnership();
         _securityStateReady = !dataStore.UsesPersistentStorage;
     }
@@ -123,6 +128,8 @@ public sealed class LumiRemoteServer : IAsyncDisposable
 
     public bool CanManageSecurityState => _ownsPersistentSecurityState;
     public bool IsSecurityStateReady => _securityStateReady;
+    public bool IsWebAppAvailable => _webApp.IsAvailable;
+    public bool IsTailscaleAvailable => VerifiedTailscaleAddresses.Count > 0;
     internal IReadOnlySet<IPAddress> VerifiedTailscaleAddresses => Volatile.Read(ref _tailscaleAddresses);
 
     internal bool HasTrackedCommandRequest(string deviceId, string requestId)
@@ -146,14 +153,32 @@ public sealed class LumiRemoteServer : IAsyncDisposable
         }
     }
 
-    /// <summary>Every currently allowed <c>http://ip:port</c> address a phone could reach.</summary>
-    public IReadOnlyList<string> ListenAddresses =>
-        GetLocalAddresses()
-            .Where(address =>
-                _dataStore.Data.Settings.RemoteAllowInsecureLan
-                || _tailscaleAddresses.Contains(NormalizeAddress(IPAddress.Parse(address))))
-            .Select(address => $"http://{address}:{Port}")
-            .ToList();
+    internal IPAddress? SelectedLocalNetworkAddress =>
+        Volatile.Read(ref _selectedLocalNetworkAddress);
+
+    /// <summary>The currently selected phone-reachable endpoint.</summary>
+    public IReadOnlyList<string> ListenAddresses
+    {
+        get
+        {
+            if (_dataStore.Data.Settings.RemoteAllowInsecureLan)
+            {
+                return SelectedLocalNetworkAddress is { } local
+                    ? [$"http://{local}:{Port}"]
+                    : [];
+            }
+
+            return _tailscaleAddresses
+                .Where(static address => address.AddressFamily == AddressFamily.InterNetwork)
+                .Select(address => $"http://{address}:{Port}")
+                .ToList();
+        }
+    }
+
+    public IReadOnlyList<string> WebAppAddresses =>
+        IsWebAppAvailable
+            ? ListenAddresses.Select(address => $"{address}/app/").ToList()
+            : [];
 
     public event Action? StateChanged;
 
@@ -204,6 +229,7 @@ public sealed class LumiRemoteServer : IAsyncDisposable
         }
 
         Port = _listener.Port;
+        RefreshSelectedLocalNetworkAddress();
         _hub = new RemoteEventHub(
             _dataStore,
             _main,
@@ -211,11 +237,7 @@ public sealed class LumiRemoteServer : IAsyncDisposable
             _instanceId);
         RefreshDiscovery();
         IsRunning = true;
-        _tailscaleRefreshTimer = new Timer(
-            _ => _ = RefreshTailscaleAddressesPeriodicallyAsync(),
-            null,
-            TailscaleRefreshInterval,
-            TailscaleRefreshInterval);
+        WatchNetworkChanges();
         StateChanged?.Invoke();
         _ = InitializeRuntimeStateAsync();
     }
@@ -224,10 +246,9 @@ public sealed class LumiRemoteServer : IAsyncDisposable
     {
         if (!IsRunning)
             return;
-
         IsRunning = false;
-        _tailscaleRefreshTimer?.Dispose();
-        _tailscaleRefreshTimer = null;
+        IsRunning = false;
+        StopWatchingNetworkChanges();
         _discovery?.Dispose();
         _discovery = null;
 
@@ -246,7 +267,6 @@ public sealed class LumiRemoteServer : IAsyncDisposable
         if (!IsRunning)
             return;
 
-        StateChanged?.Invoke();
         _ = RefreshNetworkPolicyAsync();
     }
 
@@ -275,10 +295,11 @@ public sealed class LumiRemoteServer : IAsyncDisposable
 
     private async Task RefreshNetworkPolicyAsync()
     {
-        await _networkPolicyGate.WaitAsync(_cts.Token).ConfigureAwait(false);
+        var entered = false;
         try
         {
-            await RefreshTailscaleAddressesAsync(_cts.Token).ConfigureAwait(false);
+            await _networkPolicyGate.WaitAsync(_cts.Token).ConfigureAwait(false);
+            entered = true;
             if (!IsRunning || _disposed)
                 return;
 
@@ -287,25 +308,27 @@ public sealed class LumiRemoteServer : IAsyncDisposable
                 stream.Dispose();
             StateChanged?.Invoke();
         }
-
         catch (OperationCanceledException) when (_cts.IsCancellationRequested)
         {
         }
         finally
         {
-            _networkPolicyGate.Release();
+            if (entered)
+                _networkPolicyGate.Release();
         }
     }
 
-    internal async Task RefreshTailscaleAddressesNowAsync(CancellationToken cancellationToken = default)
+    internal async Task RefreshNetworkAddressesNowAsync(CancellationToken cancellationToken = default)
     {
         await _networkPolicyGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var changed = await RefreshTailscaleAddressesAsync(cancellationToken).ConfigureAwait(false);
-            if (!changed || !IsRunning || _disposed)
+            var tailscaleChanged = await RefreshTailscaleAddressesAsync(cancellationToken).ConfigureAwait(false);
+            var localChanged = RefreshSelectedLocalNetworkAddress();
+            if ((!tailscaleChanged && !localChanged) || !IsRunning || _disposed)
                 return;
 
+            RefreshDiscovery();
             foreach (var stream in _streams.Values)
                 stream.Dispose();
             StateChanged?.Invoke();
@@ -316,21 +339,63 @@ public sealed class LumiRemoteServer : IAsyncDisposable
         }
     }
 
-    private async Task RefreshTailscaleAddressesPeriodicallyAsync()
+    private void WatchNetworkChanges()
+    {
+        if (_isWatchingNetworkChanges)
+            return;
+
+        _networkChangeRefreshTimer = new Timer(
+            _ => _ = RefreshNetworkAddressesAfterChangeAsync(),
+            null,
+            Timeout.InfiniteTimeSpan,
+            Timeout.InfiniteTimeSpan);
+        NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
+        _isWatchingNetworkChanges = true;
+    }
+
+    private void StopWatchingNetworkChanges()
+    {
+        if (_isWatchingNetworkChanges)
+        {
+            NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
+            _isWatchingNetworkChanges = false;
+        }
+
+        _networkChangeRefreshTimer?.Dispose();
+        _networkChangeRefreshTimer = null;
+    }
+
+    private void OnNetworkAddressChanged(object? sender, EventArgs e)
     {
         if (!IsRunning || _disposed)
             return;
 
         try
         {
-            await RefreshTailscaleAddressesNowAsync(_cts.Token).ConfigureAwait(false);
+            _networkChangeRefreshTimer?.Change(
+                NetworkChangeRefreshDelay,
+                Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException) when (_disposed || !IsRunning)
+        {
+        }
+    }
+
+    private async Task RefreshNetworkAddressesAfterChangeAsync()
+    {
+        try
+        {
+            await RefreshNetworkAddressesNowAsync(_cts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (_cts.IsCancellationRequested)
         {
         }
+        catch (ObjectDisposedException) when (_disposed)
+        {
+        }
         catch (Exception ex)
         {
-            Trace.TraceWarning($"[Remote] Periodic Tailscale refresh failed: {ex.Message}");
+            Trace.TraceWarning($"[Remote] Network address refresh failed: {ex.Message}");
         }
     }
 
@@ -338,11 +403,15 @@ public sealed class LumiRemoteServer : IAsyncDisposable
     {
         _discovery?.Dispose();
         _discovery = null;
-        if (!_dataStore.Data.Settings.RemoteAllowInsecureLan)
+        if (!_dataStore.Data.Settings.RemoteAllowInsecureLan
+            || SelectedLocalNetworkAddress is not { } localAddress)
+        {
             return;
+        }
 
         _discovery = new RemoteDiscoveryResponder(
             _instanceId,
+            localAddress,
             () => Port,
             () => _dataStore.Data.Settings.UserName ?? "");
         _discovery.Start();
@@ -386,15 +455,23 @@ public sealed class LumiRemoteServer : IAsyncDisposable
         EndPoint? remoteEndPoint,
         EndPoint? localEndPoint)
     {
+        if (!IsAllowedHost(request, localEndPoint))
+        {
+            return RemoteHttpPreflightResult.Reject(
+                403,
+                "Use this PC's Lumi address instead of another hostname.");
+        }
+
         if (!IsAllowedCaller(
                 remoteEndPoint,
                 localEndPoint,
                 _dataStore.Data.Settings.RemoteAllowInsecureLan,
-                _tailscaleAddresses))
+                _tailscaleAddresses,
+                SelectedLocalNetworkAddress))
         {
             return RemoteHttpPreflightResult.Reject(
                 403,
-                "Use Tailscale, or explicitly enable unencrypted LAN access in Lumi Settings.");
+                "Connect through Tailscale, or select Local Wi-Fi in Lumi Settings.");
         }
 
         var path = request.Path.TrimEnd('/');
@@ -406,6 +483,9 @@ public sealed class LumiRemoteServer : IAsyncDisposable
         {
             return RemoteHttpPreflightResult.Allow(RemoteProtocol.MaxHandshakeJsonBytes);
         }
+
+        if (RemoteWebAppHandler.IsWebPath(path))
+            return RemoteHttpPreflightResult.Allow(0);
 
         if (!TryAuthorize(request, out _))
             return RemoteHttpPreflightResult.Reject(401, "Pair this device with Lumi first.");
@@ -428,6 +508,17 @@ public sealed class LumiRemoteServer : IAsyncDisposable
     {
         try
         {
+            if (!IsAllowedHost(context.Request, context.LocalEndPoint))
+            {
+                await WriteErrorAsync(
+                        context,
+                        403,
+                        "Use this PC's Lumi address instead of another hostname.",
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                return;
+            }
+
             if (string.Equals(context.Request.Method, "OPTIONS", StringComparison.OrdinalIgnoreCase))
             {
                 await context.WriteTextAsync("", cancellationToken).ConfigureAwait(false);
@@ -438,12 +529,13 @@ public sealed class LumiRemoteServer : IAsyncDisposable
                     context.RemoteEndPoint,
                     context.LocalEndPoint,
                     _dataStore.Data.Settings.RemoteAllowInsecureLan,
-                    _tailscaleAddresses))
+                    _tailscaleAddresses,
+                    SelectedLocalNetworkAddress))
             {
                 await WriteErrorAsync(
                         context,
                         403,
-                        "Use Tailscale, or explicitly enable unencrypted LAN access in Lumi Settings.",
+                        "Connect through Tailscale, or select Local Wi-Fi in Lumi Settings.",
                         cancellationToken)
                     .ConfigureAwait(false);
                 return;
@@ -452,6 +544,12 @@ public sealed class LumiRemoteServer : IAsyncDisposable
             var path = context.Request.Path.TrimEnd('/');
             if (path.Length == 0)
                 path = "/";
+
+            if (RemoteWebAppHandler.IsWebPath(path))
+            {
+                await _webApp.HandleAsync(context, cancellationToken).ConfigureAwait(false);
+                return;
+            }
 
             switch (path)
             {
@@ -1078,8 +1176,54 @@ public sealed class LumiRemoteServer : IAsyncDisposable
                              .BuildDescriptors(content, authorizedPaths)?
                              .Take(RemoteProtocol.MobileInlineImageCountLimit)
                              .Any(image => image.Index == imageIndex) == true;
-        if (!advertised
-            || !RemoteMarkdownImageFiles.TryResolveReferencedPath(
+        if (!advertised)
+        {
+            await WriteErrorAsync(
+                    context,
+                    404,
+                    "That inline image is no longer available.",
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (RemoteMarkdownImageFiles.TryResolveReferencedRemoteUri(
+                content,
+                imageIndex,
+                out var remoteUri))
+        {
+            try
+            {
+                var download = await StrataMarkdown.DownloadPublicMarkdownImageAsync(
+                        remoteUri,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                await using var remoteStream = new MemoryStream(download.Content, writable: false);
+                await context.WriteStreamAsync(
+                        remoteStream,
+                        download.Content.LongLength,
+                        download.ContentType,
+                        new Dictionary<string, string>
+                        {
+                            ["Cache-Control"] = "private, max-age=86400",
+                            ["X-Content-Type-Options"] = "nosniff"
+                        },
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or InvalidDataException or OperationCanceledException)
+            {
+                await WriteErrorAsync(
+                        context,
+                        ex is InvalidDataException ? 413 : 404,
+                        "That remote inline image could not be loaded safely.",
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            return;
+        }
+
+        if (!RemoteMarkdownImageFiles.TryResolveReferencedPath(
                 content,
                 imageIndex,
                 authorizedPaths,
@@ -2093,7 +2237,8 @@ public sealed class LumiRemoteServer : IAsyncDisposable
                     remoteEndPoint,
                     localEndPoint,
                     _dataStore.Data.Settings.RemoteAllowInsecureLan,
-                    _tailscaleAddresses))
+                    _tailscaleAddresses,
+                    SelectedLocalNetworkAddress))
             {
                 return null;
             }
@@ -2130,9 +2275,9 @@ public sealed class LumiRemoteServer : IAsyncDisposable
     }
 
     /// <summary>
-    /// Refuses anything that is not loopback, a verified Tailscale socket, or an explicitly allowed
-    /// private-network peer. RFC6598 addresses alone do not prove Tailscale: enterprise and carrier
-    /// networks may route the same range without WireGuard protection.
+    /// Refuses anything that is not loopback, a verified Tailscale socket, or a private peer that
+    /// reached the single local interface selected for onboarding. RFC6598 addresses alone do not
+    /// prove Tailscale: enterprise and carrier networks may route the same range without WireGuard.
     /// </summary>
     internal static bool IsPrivateCaller(EndPoint? endPoint)
     {
@@ -2171,7 +2316,8 @@ public sealed class LumiRemoteServer : IAsyncDisposable
         EndPoint? remoteEndPoint,
         EndPoint? localEndPoint,
         bool allowInsecureLan,
-        IReadOnlySet<IPAddress>? verifiedTailscaleAddresses = null)
+        IReadOnlySet<IPAddress>? verifiedTailscaleAddresses = null,
+        IPAddress? selectedLocalNetworkAddress = null)
     {
         if (remoteEndPoint is not IPEndPoint remoteIpEndPoint)
             return false;
@@ -2184,13 +2330,52 @@ public sealed class LumiRemoteServer : IAsyncDisposable
         var localAddress = localEndPoint is IPEndPoint localIpEndPoint
             ? NormalizeAddress(localIpEndPoint.Address)
             : null;
-        var isVerifiedTailscaleSocket = localAddress is not null
+        var isVerifiedTailscaleSocket = !allowInsecureLan
+                                        && localAddress is not null
                                         && verifiedTailscaleAddresses?.Contains(localAddress) == true
                                         && IsTailscaleAddress(remoteAddress);
+        var isSelectedLocalNetworkSocket = allowInsecureLan
+                                           && localAddress is not null
+                                           && selectedLocalNetworkAddress is not null
+                                           && localAddress.Equals(
+                                               NormalizeAddress(selectedLocalNetworkAddress))
+                                           && IsPrivateCaller(
+                                               new IPEndPoint(
+                                                   remoteAddress,
+                                                   remoteIpEndPoint.Port));
 
         return isVerifiedTailscaleSocket
-               || allowInsecureLan
-               && IsPrivateCaller(new IPEndPoint(remoteAddress, remoteIpEndPoint.Port));
+               || isSelectedLocalNetworkSocket;
+    }
+
+    internal static bool IsAllowedHost(
+        RemoteHttpRequest request,
+        EndPoint? localEndPoint)
+    {
+        var hostHeader = request.Header("Host");
+        if (string.IsNullOrWhiteSpace(hostHeader)
+            || !Uri.TryCreate($"http://{hostHeader}", UriKind.Absolute, out var hostUri))
+        {
+            return false;
+        }
+
+        var host = hostUri.IdnHost.TrimEnd('.');
+        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(host, Environment.MachineName, StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".ts.net", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!IPAddress.TryParse(host.Trim('[', ']'), out var hostAddress))
+            return false;
+
+        hostAddress = NormalizeAddress(hostAddress);
+        if (IPAddress.IsLoopback(hostAddress))
+            return true;
+
+        return localEndPoint is IPEndPoint localIpEndPoint
+               && hostAddress.Equals(NormalizeAddress(localIpEndPoint.Address));
     }
 
     internal static bool IsTailscaleAddress(IPAddress address)
@@ -2207,6 +2392,18 @@ public sealed class LumiRemoteServer : IAsyncDisposable
             return false;
 
         Interlocked.Exchange(ref _tailscaleAddresses, addresses);
+        return true;
+    }
+
+    private bool RefreshSelectedLocalNetworkAddress()
+    {
+        var selected = MobileOnboardingLinks.SelectLocalAddress(
+            GetLocalAddresses().Select(IPAddress.Parse));
+        var previous = SelectedLocalNetworkAddress;
+        if (Equals(previous, selected))
+            return false;
+
+        Interlocked.Exchange(ref _selectedLocalNetworkAddress, selected);
         return true;
     }
 

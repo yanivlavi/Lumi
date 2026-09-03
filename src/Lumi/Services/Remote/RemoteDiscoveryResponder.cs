@@ -1,6 +1,5 @@
 using System;
 using System.Diagnostics;
-using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -23,17 +22,26 @@ namespace Lumi.Services.Remote;
 internal sealed class RemoteDiscoveryResponder : IDisposable
 {
     private readonly string _instanceId;
+    private readonly IPAddress _localAddress;
     private readonly Func<int> _portProvider;
     private readonly Func<string> _userNameProvider;
+    private readonly int _discoveryPort;
     private readonly CancellationTokenSource _cts = new();
     private UdpClient? _udp;
     private Task? _loop;
 
-    public RemoteDiscoveryResponder(string instanceId, Func<int> portProvider, Func<string> userNameProvider)
+    public RemoteDiscoveryResponder(
+        string instanceId,
+        IPAddress localAddress,
+        Func<int> portProvider,
+        Func<string> userNameProvider,
+        int discoveryPort = RemoteProtocol.DiscoveryPort)
     {
         _instanceId = instanceId;
+        _localAddress = localAddress;
         _portProvider = portProvider;
         _userNameProvider = userNameProvider;
+        _discoveryPort = discoveryPort;
     }
 
     public void Start()
@@ -42,7 +50,7 @@ internal sealed class RemoteDiscoveryResponder : IDisposable
         {
             var udp = new UdpClient(AddressFamily.InterNetwork);
             udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            udp.Client.Bind(new IPEndPoint(IPAddress.Any, RemoteProtocol.DiscoveryPort));
+            udp.Client.Bind(new IPEndPoint(IPAddress.Any, _discoveryPort));
             udp.EnableBroadcast = true;
             _udp = udp;
             _loop = Task.Run(() => ListenAsync(udp, _cts.Token));
@@ -78,7 +86,7 @@ internal sealed class RemoteDiscoveryResponder : IDisposable
                 if (!LumiRemoteServer.IsPrivateCaller(result.RemoteEndPoint))
                     continue;
 
-                var payload = BuildBeacon(result.RemoteEndPoint.Address);
+                var payload = BuildBeacon();
                 await udp.SendAsync(payload, payload.Length, result.RemoteEndPoint).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
@@ -88,54 +96,19 @@ internal sealed class RemoteDiscoveryResponder : IDisposable
         }
     }
 
-    private byte[] BuildBeacon(IPAddress requester)
+    private byte[] BuildBeacon()
     {
         var beacon = new RemoteBeacon
         {
             InstanceId = _instanceId,
             HostName = Environment.MachineName,
             UserName = _userNameProvider(),
-            Address = PickAdvertisedAddress(requester),
+            Address = _localAddress.ToString(),
             Port = _portProvider()
         };
 
         var json = JsonSerializer.Serialize(beacon, RemoteJsonContext.Default.RemoteBeacon);
         return Encoding.UTF8.GetBytes(RemoteProtocol.DiscoveryBeacon + json);
-    }
-
-    /// <summary>
-    /// Picks the local address that shares the longest prefix with the requester, so a machine with
-    /// several adapters (Wi-Fi, Ethernet, VM bridges, VPN) advertises the one the phone can reach.
-    /// </summary>
-    private static string PickAdvertisedAddress(IPAddress requester)
-    {
-        var candidates = LumiRemoteServer.GetLocalAddresses();
-        if (candidates.Count == 0)
-            return IPAddress.Loopback.ToString();
-
-        var requesterBytes = requester.AddressFamily == AddressFamily.InterNetwork
-            ? requester.GetAddressBytes()
-            : null;
-
-        if (requesterBytes is null)
-            return candidates[0];
-
-        return candidates
-            .OrderByDescending(candidate => SharedPrefixLength(IPAddress.Parse(candidate).GetAddressBytes(), requesterBytes))
-            .First();
-    }
-
-    private static int SharedPrefixLength(byte[] left, byte[] right)
-    {
-        var shared = 0;
-        for (var i = 0; i < Math.Min(left.Length, right.Length); i++)
-        {
-            if (left[i] != right[i])
-                break;
-            shared++;
-        }
-
-        return shared;
     }
 
     public void Dispose()

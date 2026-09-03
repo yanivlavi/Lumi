@@ -62,7 +62,7 @@ public sealed class UiScaleShortcutTests
             try
             {
                 viewModel.SelectedNavIndex = 7;
-                viewModel.SettingsVM.SelectedPageIndex = 2;
+                viewModel.SettingsVM.SelectedPageIndex = 3;
                 await PumpAsync();
 
                 var slider = window.GetVisualDescendants()
@@ -154,7 +154,7 @@ public sealed class UiScaleShortcutTests
             try
             {
                 viewModel.SelectedNavIndex = 7;
-                viewModel.SettingsVM.SelectedPageIndex = 2;
+                viewModel.SettingsVM.SelectedPageIndex = 3;
                 await PumpAsync();
 
                 var slider = window.GetVisualDescendants()

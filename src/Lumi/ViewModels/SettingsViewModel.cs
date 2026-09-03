@@ -20,7 +20,7 @@ public sealed record ByokApiKeyModeOption(ByokApiKeyMode Value, string DisplayNa
 
 public partial class SettingsViewModel : ObservableObject, IDisposable
 {
-    public const int AboutPageIndex = 6;
+    public const int AboutPageIndex = 7;
 
     private readonly DataStore _dataStore;
     private readonly CopilotService _copilotService;
@@ -60,6 +60,7 @@ public partial class SettingsViewModel : ObservableObject, IDisposable
     [
         Loc.Settings_Profile,
         Loc.Settings_General,
+        Loc.Settings_Mobile,
         Loc.Settings_Appearance,
         Loc.Settings_Chat,
         Loc.Settings_AIModels,

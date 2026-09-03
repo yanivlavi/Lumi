@@ -1225,7 +1225,10 @@ public sealed class TranscriptRefreshStateMachineTests
                                 Capabilities = [RemoteProtocol.Capabilities.ScopedEventsV1],
                                 HostName = "TEST-PC",
                                 UserName = "Tester",
-                                IsPaired = false
+                                IsPaired = request.Headers.TryGetValues(
+                                        RemoteProtocol.DeviceTokenHeader,
+                                        out var tokens)
+                                    && tokens.Contains("test-token", StringComparer.Ordinal)
                             },
                             RemoteJsonContext.Default.RemoteHello));
 

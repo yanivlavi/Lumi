@@ -1,4 +1,5 @@
 using Android.App;
+using Android.Content;
 using Android.Content.PM;
 using Android.OS;
 using Android.Views;
@@ -9,6 +10,7 @@ using AndroidX.Window.Java.Layout;
 using AndroidX.Window.Layout;
 using Avalonia.Android;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Threading;
 using Java.Interop;
 using Java.Util.Concurrent;
 using Lumi.Mobile.Layout;
@@ -41,6 +43,11 @@ namespace Lumi.Mobile.Android;
         | ConfigChanges.UiMode
         | ConfigChanges.Density
         | ConfigChanges.KeyboardHidden)]
+[IntentFilter(
+    new[] { Intent.ActionView },
+    Categories = new[] { Intent.CategoryDefault, Intent.CategoryBrowsable },
+    DataScheme = "lumi",
+    DataHost = "connect")]
 public class MainActivity : AvaloniaMainActivity, IConsumer
 {
     private const string FoldableTag = "LumiFoldable";
@@ -56,6 +63,8 @@ public class MainActivity : AvaloniaMainActivity, IConsumer
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
+        TryGetConnectionRequest(Intent, out var launchRequest);
+
         _nativeComposerEditorFactory =
             new AndroidNativeComposerEditorFactory(this);
         MobilePlatformServices.NativeComposerEditorFactory =
@@ -70,6 +79,8 @@ public class MainActivity : AvaloniaMainActivity, IConsumer
             Window?.SetDecorFitsSystemWindows(false);
 
         base.OnCreate(savedInstanceState);
+        if (launchRequest is not null)
+            DispatchConnectionRequest(launchRequest);
 
         _textSelectionPresenter = new AndroidTextSelectionPresenter(this);
         MobilePlatformServices.TextSelectionPresenter = _textSelectionPresenter;
@@ -98,6 +109,15 @@ public class MainActivity : AvaloniaMainActivity, IConsumer
             DisposeWindowLayoutTracking();
             PublishFoldLayout(FoldPosture.Flat, 0, 0);
         }
+    }
+
+    protected override void OnNewIntent(Intent? intent)
+    {
+        base.OnNewIntent(intent);
+        if (!TryGetConnectionRequest(intent, out var request))
+            return;
+
+        DispatchConnectionRequest(request!);
     }
 
     protected override void OnStart()
@@ -165,6 +185,19 @@ public class MainActivity : AvaloniaMainActivity, IConsumer
                 ?.Show();
         }
     }
+
+    private static bool TryGetConnectionRequest(
+        Intent? intent,
+        out MobileConnectionLaunchRequest? request) =>
+        MobileConnectionLaunchRequest.TryParse(intent?.DataString, out request);
+
+    private static void DispatchConnectionRequest(
+        MobileConnectionLaunchRequest request) =>
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (Avalonia.Application.Current is App { Shell: { } shell })
+                _ = shell.HandleConnectionLaunchAsync(request);
+        });
 
     protected override void OnStop()
     {

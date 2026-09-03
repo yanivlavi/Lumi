@@ -298,7 +298,8 @@ public sealed class MobileTransportScopeTests
                     new RemoteHello
                     {
                         ProtocolVersion = protocolVersion,
-                        Capabilities = Capabilities()
+                        Capabilities = Capabilities(),
+                        IsPaired = true
                     },
                     RemoteJsonContext.Default.RemoteHello);
             }

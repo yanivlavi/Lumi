@@ -106,6 +106,6 @@
     Strata's default stack starts with Segoe UI Variable / SF Pro, neither of which exists on
     Android. Inter is embedded by every head, so the phone renders identically to the PC.
   -->
-  <FontFamily x:Key="Font.Family">Inter, Segoe UI Variable, Segoe UI, SF Pro Display, -apple-system, Helvetica Neue, Roboto, Arial, sans-serif</FontFamily>
+  <FontFamily x:Key="Font.Family">avares://Avalonia.Fonts.Inter/Assets#Inter</FontFamily>
   <FontFamily x:Key="Font.FamilyMono">Cascadia Code, JetBrains Mono, Consolas, Roboto Mono, Droid Sans Mono, monospace</FontFamily>
 </ResourceDictionary>

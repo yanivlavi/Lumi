@@ -169,9 +169,58 @@ public sealed class InlineImageResolutionTests
         await sink.Canceled.Task.WaitAsync(TimeSpan.FromSeconds(2));
     }
 
+    [Fact]
+    public async Task SwitchingChatsReleasesResolvedImageLeases()
+    {
+        using var session = HeadlessMobileSession.Start();
+        var chatId = Guid.NewGuid();
+        var messageId = Guid.NewGuid();
+        var sink = new ImageSink("/data/user/0/com.lumi.mobile/cache/local.png");
+        await session.Dispatch(() =>
+        {
+            var chat = new MobileChatViewModel(sink);
+            chat.Reset(chatId, "Images");
+            chat.ApplyTranscript(new RemoteTranscript
+            {
+                ChatId = chatId,
+                Revision = 1,
+                Turns =
+                [
+                    new RemoteTranscriptTurn
+                    {
+                        Id = "turn",
+                        Items =
+                        [
+                            new RemoteTranscriptItem
+                            {
+                                Id = messageId.ToString("N"),
+                                Kind = RemoteProtocol.ItemKinds.Assistant,
+                                Text = "![Local](C:\\Images\\local.png)",
+                                InlineImages =
+                                [
+                                    new RemoteInlineImage
+                                    {
+                                        Index = 0,
+                                        FileName = "local.png"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            });
+            Dispatcher.UIThread.RunJobs();
+
+            chat.Reset(Guid.NewGuid(), "Other chat");
+        }, CancellationToken.None);
+
+        Assert.Equal((chatId, messageId, 0), sink.LastRelease);
+    }
+
     private sealed class ImageSink(string path) : IRemoteCommandSink, IRemoteMarkdownImageSink
     {
         public (Guid ChatId, Guid MessageId, int Index) LastRequest { get; private set; }
+        public (Guid ChatId, Guid MessageId, int Index)? LastRelease { get; private set; }
 
         public Task<RemoteCommandResult> SendCommandAsync(RemoteCommand command) =>
             Task.FromResult(new RemoteCommandResult { Ok = true });
@@ -190,6 +239,15 @@ public sealed class InlineImageResolutionTests
         {
             LastRequest = (chatId, messageId, imageIndex);
             return Task.FromResult<string?>(path);
+        }
+
+        public void ReleaseMarkdownImages(
+            Guid chatId,
+            Guid messageId,
+            IReadOnlyList<RemoteInlineImage> images)
+        {
+            if (images.Count > 0)
+                LastRelease = (chatId, messageId, images[0].Index);
         }
     }
 
@@ -224,6 +282,13 @@ public sealed class InlineImageResolutionTests
                 Canceled.TrySetResult();
                 throw;
             }
+        }
+
+        public void ReleaseMarkdownImages(
+            Guid chatId,
+            Guid messageId,
+            IReadOnlyList<RemoteInlineImage> images)
+        {
         }
     }
 }

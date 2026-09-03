@@ -366,7 +366,11 @@ internal sealed record RemoteHttpRequest(
 {
     public string? Header(string name) => Headers.GetValueOrDefault(name);
 
-    public bool AcceptsGzip()
+    public bool AcceptsGzip() => AcceptsEncoding("gzip");
+
+    public bool AcceptsBrotli() => AcceptsEncoding("br");
+
+    private bool AcceptsEncoding(string encoding)
     {
         var acceptEncoding = Header("Accept-Encoding");
         if (string.IsNullOrWhiteSpace(acceptEncoding))
@@ -402,7 +406,7 @@ internal sealed record RemoteHttpRequest(
                 }
             }
 
-            if (string.Equals(parts[0], "gzip", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(parts[0], encoding, StringComparison.OrdinalIgnoreCase))
                 gzipQuality = Math.Max(gzipQuality ?? 0, quality);
             else if (parts[0] == "*")
                 wildcardQuality = Math.Max(wildcardQuality ?? 0, quality);
@@ -538,7 +542,8 @@ internal sealed class RemoteHttpContext
             "application/json; charset=utf-8",
             Encoding.UTF8.GetBytes(json),
             cancellationToken,
-            allowCompression: true);
+            allowCompression: true,
+            new Dictionary<string, string> { ["Cache-Control"] = "no-store" });
 
     public Task WriteTextAsync(string text, CancellationToken cancellationToken, int status = 200) =>
         WriteAsync(
@@ -546,7 +551,79 @@ internal sealed class RemoteHttpContext
             "text/plain; charset=utf-8",
             Encoding.UTF8.GetBytes(text),
             cancellationToken,
-            allowCompression: false);
+            allowCompression: false,
+            new Dictionary<string, string> { ["Cache-Control"] = "no-store" });
+
+    public Task WriteRedirectAsync(
+        string location,
+        CancellationToken cancellationToken,
+        int status = 302) =>
+        WriteAsync(
+            status,
+            "text/plain; charset=utf-8",
+            [],
+            cancellationToken,
+            allowCompression: false,
+            new Dictionary<string, string>
+            {
+                ["Location"] = location,
+                ["Cache-Control"] = "no-store"
+            });
+
+    public async Task WriteStreamAsync(
+        Stream source,
+        long length,
+        string contentType,
+        IReadOnlyDictionary<string, string> headers,
+        CancellationToken cancellationToken,
+        int status = 200,
+        bool headOnly = false)
+    {
+        var header = new StringBuilder()
+            .Append("HTTP/1.1 ").Append(status).Append(' ').Append(ReasonPhrase(status)).Append("\r\n")
+            .Append("Content-Type: ").Append(contentType).Append("\r\n")
+            .Append("Content-Length: ").Append(length).Append("\r\n");
+        AppendHeaders(header, headers);
+        header
+            .Append("Connection: ").Append(KeepAlive ? "keep-alive" : "close").Append("\r\n")
+            .Append("\r\n");
+
+        await WriteWithDeadlineAsync(Encoding.UTF8.GetBytes(header.ToString()), cancellationToken)
+            .ConfigureAwait(false);
+        if (!headOnly && status != 304)
+        {
+            var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+            try
+            {
+                while (true)
+                {
+                    var read = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)
+                        .ConfigureAwait(false);
+                    if (read == 0)
+                        break;
+                    await WriteWithDeadlineAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(buffer);
+            }
+        }
+
+        await FlushWithDeadlineAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task WriteEmptyAsync(
+        int status,
+        IReadOnlyDictionary<string, string> headers,
+        CancellationToken cancellationToken) =>
+        WriteAsync(
+            status,
+            "text/plain; charset=utf-8",
+            [],
+            cancellationToken,
+            allowCompression: false,
+            headers);
 
     public async Task WriteFileAsync(
         Stream source,
@@ -591,7 +668,8 @@ internal sealed class RemoteHttpContext
         string contentType,
         byte[] body,
         CancellationToken cancellationToken,
-        bool allowCompression)
+        bool allowCompression,
+        IReadOnlyDictionary<string, string>? headers = null)
     {
         var useGzip =
             allowCompression
@@ -607,6 +685,8 @@ internal sealed class RemoteHttpContext
             header.Append("Vary: Accept-Encoding\r\n");
         if (useGzip)
             header.Append("Content-Encoding: gzip\r\n");
+        if (headers is not null)
+            AppendHeaders(header, headers);
 
         header
             .Append("Content-Length: ").Append(responseBody.Length).Append("\r\n")
@@ -617,6 +697,22 @@ internal sealed class RemoteHttpContext
         if (responseBody.Length > 0)
             await WriteWithDeadlineAsync(responseBody, cancellationToken).ConfigureAwait(false);
         await FlushWithDeadlineAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void AppendHeaders(
+        StringBuilder builder,
+        IReadOnlyDictionary<string, string> headers)
+    {
+        foreach (var (name, value) in headers)
+        {
+            if (name.IndexOfAny(['\r', '\n', ':']) >= 0
+                || value.IndexOfAny(['\r', '\n']) >= 0)
+            {
+                throw new InvalidOperationException("Invalid HTTP response header.");
+            }
+
+            builder.Append(name).Append(": ").Append(value).Append("\r\n");
+        }
     }
 
     internal static byte[] CompressGzip(ReadOnlySpan<byte> body)
@@ -689,10 +785,15 @@ internal sealed class RemoteHttpContext
     private static string ReasonPhrase(int status) => status switch
     {
         200 => "OK",
+        204 => "No Content",
+        302 => "Found",
+        304 => "Not Modified",
+        308 => "Permanent Redirect",
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
+        405 => "Method Not Allowed",
         429 => "Too Many Requests",
         413 => "Payload Too Large",
         500 => "Internal Server Error",

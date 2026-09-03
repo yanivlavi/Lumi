@@ -33,8 +33,10 @@ public enum ConnectStep
 public sealed partial class ConnectViewModel : ObservableObject
 {
     private readonly LumiRemoteClient _client;
-    private readonly LumiDiscoveryClient _discovery;
+    private readonly ILumiDiscoveryClient _discovery;
     private readonly Func<string, string, Task> _onPaired;
+    private readonly string? _fixedBaseUrl;
+    private readonly string _fixedEndpointName;
     private CancellationTokenSource? _searchCts;
 
     [ObservableProperty] private ConnectStep _step = ConnectStep.FindPc;
@@ -49,12 +51,18 @@ public sealed partial class ConnectViewModel : ObservableObject
 
     public ConnectViewModel(
         LumiRemoteClient client,
-        LumiDiscoveryClient discovery,
-        Func<string, string, Task> onPaired)
+        ILumiDiscoveryClient discovery,
+        Func<string, string, Task> onPaired,
+        IMobileHostEnvironment? hostEnvironment = null)
     {
         _client = client;
         _discovery = discovery;
         _onPaired = onPaired;
+        hostEnvironment ??= MobilePlatformServices.HostEnvironment;
+        _fixedBaseUrl = hostEnvironment.HasFixedEndpoint
+            ? hostEnvironment.FixedBaseUrl
+            : null;
+        _fixedEndpointName = hostEnvironment.FixedEndpointName;
     }
 
     public ObservableCollection<DiscoveredHostViewModel> Hosts { get; } = [];
@@ -69,6 +77,12 @@ public sealed partial class ConnectViewModel : ObservableObject
 
     public bool CanSubmitCode => PairingCode.Length == 6;
 
+    public bool HasFixedEndpoint => _fixedBaseUrl is { Length: > 0 };
+
+    public bool CanChooseDifferentPc => !HasFixedEndpoint;
+
+    public string PairActionText => HasFixedEndpoint ? "Connect web app" : "Connect phone";
+
     private string _targetBaseUrl = "";
 
     partial void OnStepChanged(ConnectStep value)
@@ -76,6 +90,26 @@ public sealed partial class ConnectViewModel : ObservableObject
         OnPropertyChanged(nameof(IsFindStep));
         OnPropertyChanged(nameof(IsCodeStep));
         OnPropertyChanged(nameof(IsBusy));
+    }
+
+    public Task InitializeAsync()
+    {
+        if (Step != ConnectStep.FindPc)
+            return Task.CompletedTask;
+        return HasFixedEndpoint
+            ? BeginPairingAsync(_fixedBaseUrl!, _fixedEndpointName)
+            : Task.CompletedTask;
+    }
+
+    public Task ApplyLaunchRequestAsync(MobileConnectionLaunchRequest request)
+    {
+        ErrorText = null;
+        ManualAddress = request.BaseUrl;
+        Step = ConnectStep.FindPc;
+        StatusText = RequiresTrustedAddressConfirmation(request.BaseUrl)
+            ? "Your PC address is ready. Confirm the trusted local network, then tap Continue."
+            : "Your PC address is ready. Review it below, then tap Continue.";
+        return Task.CompletedTask;
     }
 
     partial void OnPairingCodeChanged(string value)
@@ -295,6 +329,19 @@ public sealed partial class ConnectViewModel : ObservableObject
             ErrorText = ex.Message;
             Step = ConnectStep.EnterCode;
         }
+    }
+
+    internal void Reset()
+    {
+        _searchCts?.Cancel();
+        Hosts.Clear();
+        PairingCode = "";
+        TargetHostName = "";
+        ErrorText = null;
+        StatusText = null;
+        _targetBaseUrl = "";
+        Step = ConnectStep.FindPc;
+        OnPropertyChanged(nameof(HasHosts));
     }
 
     [RelayCommand]

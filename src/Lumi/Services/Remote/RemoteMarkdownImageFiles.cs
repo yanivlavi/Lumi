@@ -54,19 +54,27 @@ internal static class RemoteMarkdownImageFiles
         List<RemoteInlineImage>? images = null;
         foreach (var reference in RemoteMarkdownImages.Find(markdown))
         {
-            if (!TryResolveAuthorizedPath(
+            if (TryResolvePublicUri(reference.Target, out var remoteUri))
+            {
+                (images ??= []).Add(new RemoteInlineImage
+                {
+                    Index = reference.Index,
+                    FileName = RemoteFileName(remoteUri, reference.Index)
+                });
+                continue;
+            }
+
+            if (TryResolveAuthorizedPath(
                     reference.Target,
                     authorizedPaths,
                     out var path))
             {
-                continue;
+                (images ??= []).Add(new RemoteInlineImage
+                {
+                    Index = reference.Index,
+                    FileName = Path.GetFileName(path)
+                });
             }
-
-            (images ??= []).Add(new RemoteInlineImage
-            {
-                Index = reference.Index,
-                FileName = Path.GetFileName(path)
-            });
         }
 
         return images;
@@ -88,6 +96,18 @@ internal static class RemoteMarkdownImageFiles
                    out path);
     }
 
+    public static bool TryResolveReferencedRemoteUri(
+        string? markdown,
+        int imageIndex,
+        out Uri uri)
+    {
+        uri = null!;
+        var reference = RemoteMarkdownImages.Find(markdown)
+            .FirstOrDefault(candidate => candidate.Index == imageIndex);
+        return reference.Target is { Length: > 0 }
+               && TryResolvePublicUri(reference.Target, out uri);
+    }
+
     private static bool TryResolveAuthorizedPath(
         string target,
         IReadOnlySet<string> authorizedPaths,
@@ -95,6 +115,29 @@ internal static class RemoteMarkdownImageFiles
     {
         return TryResolveLocalPath(target, out path)
                && authorizedPaths.Contains(path);
+    }
+
+    private static bool TryResolvePublicUri(string target, out Uri uri)
+    {
+        if (Uri.TryCreate(target, UriKind.Absolute, out uri!)
+            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+            && string.IsNullOrEmpty(uri.UserInfo)
+            && !uri.IsLoopback
+            && !string.Equals(uri.DnsSafeHost, "localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        uri = null!;
+        return false;
+    }
+
+    private static string RemoteFileName(Uri uri, int imageIndex)
+    {
+        var name = Path.GetFileName(uri.AbsolutePath);
+        return string.IsNullOrWhiteSpace(name)
+            ? $"image-{imageIndex}.png"
+            : name;
     }
 
     private static bool TryResolveLocalPath(string target, out string path)

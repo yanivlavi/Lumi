@@ -1,0 +1,137 @@
+:root {
+    color-scheme: dark;
+    font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #0f1117;
+    color: #f4f6fb;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+        radial-gradient(circle at 50% -10%, rgba(98, 91, 246, 0.25), transparent 38rem),
+        #0f1117;
+}
+
+main {
+    width: min(100%, 34rem);
+    margin: 0 auto;
+    padding:
+        max(1.25rem, env(safe-area-inset-top))
+        1rem
+        max(2rem, env(safe-area-inset-bottom));
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    margin-bottom: 1rem;
+    font-size: 1.15rem;
+    font-weight: 700;
+}
+
+.brand img {
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 0.7rem;
+}
+
+.card {
+    padding: 1.35rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 1.25rem;
+    background: rgba(27, 30, 40, 0.94);
+    box-shadow: 0 1.2rem 4rem rgba(0, 0, 0, 0.28);
+}
+
+.eyebrow {
+    margin: 0 0 0.4rem;
+    color: #9d98ff;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+h1 {
+    margin: 0;
+    font-size: clamp(1.75rem, 8vw, 2.35rem);
+    line-height: 1.08;
+}
+
+.intro {
+    margin: 0.8rem 0 1.4rem;
+    color: #b9becc;
+    line-height: 1.5;
+}
+
+.step {
+    display: grid;
+    grid-template-columns: 2rem minmax(0, 1fr);
+    gap: 0.8rem;
+    padding: 1.05rem 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.number {
+    display: grid;
+    width: 2rem;
+    height: 2rem;
+    place-items: center;
+    border-radius: 999px;
+    background: rgba(98, 91, 246, 0.22);
+    color: #c8c5ff;
+    font-weight: 700;
+}
+
+h2 {
+    margin: 0.18rem 0 0.35rem;
+    font-size: 1rem;
+}
+
+.step p {
+    margin: 0 0 0.75rem;
+    color: #aeb4c3;
+    line-height: 1.45;
+}
+
+.button {
+    display: flex;
+    min-height: 3rem;
+    align-items: center;
+    justify-content: center;
+    padding: 0.75rem 1rem;
+    border-radius: 0.85rem;
+    font-weight: 700;
+    text-decoration: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.primary {
+    background: #6c63ff;
+    color: white;
+}
+
+.secondary {
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.07);
+    color: white;
+}
+
+.hint {
+    margin-top: 0.55rem !important;
+    font-size: 0.82rem;
+}
+
+.web-link {
+    display: block;
+    margin-top: 0.6rem;
+    padding: 0.8rem;
+    color: #bdb9ff;
+    text-align: center;
+}

@@ -12,6 +12,14 @@
     <Setter Property="behaviors:TouchScrollClickGuard.IsEnabled" Value="True" />
   </Style>
 
+  <Style Selector="TextBox">
+    <Setter Property="behaviors:NativeTextInputOverlay.IsEnabled" Value="True" />
+  </Style>
+
+  <Style Selector="sc|StrataChatMessage /template/ TextBox#PART_EditBox">
+    <Setter Property="behaviors:NativeTextInputOverlay.ForwardEnterKey" Value="True" />
+  </Style>
+
   <Style Selector="Button.touch">
     <Setter Property="MinHeight" Value="48" />
     <Setter Property="MinWidth" Value="48" />
@@ -99,6 +107,27 @@
     <Setter Property="Padding" Value="14,12" />
     <Setter Property="CornerRadius" Value="14" />
     <Setter Property="FontSize" Value="{DynamicResource Font.SizeBody}" />
+  </Style>
+
+  <Style Selector="TextBox.native-input-focused /template/ Border#PART_Border">
+    <Setter Property="BorderBrush" Value="{DynamicResource Brush.BorderFocus}" />
+    <Setter Property="BoxShadow" Value="0 0 0 2 #1A4F46E5" />
+  </Style>
+
+  <Style Selector="TextBox.native-input-focused /template/ Border#FocusAccentBar">
+    <Setter Property="Opacity" Value="1" />
+  </Style>
+
+  <Style Selector="TextBox.native-input-overlay.native-input-focused /template/ TextPresenter#PART_TextPresenter">
+    <Setter Property="Opacity" Value="0" />
+  </Style>
+
+  <Style Selector="TextBox.native-input-overlay.native-input-focused /template/ TextBlock#PART_Watermark">
+    <Setter Property="Opacity" Value="0" />
+  </Style>
+
+  <Style Selector="TextBox.native-input-overlay.native-input-focused /template/ TextBlock#PART_FloatingWatermark">
+    <Setter Property="Opacity" Value="0" />
   </Style>
 
   <Style Selector="TextBox.pairing-code">
@@ -435,6 +464,7 @@
 
   <Style Selector="sc|StrataChatComposer.mobile /template/ TextBox#PART_Input">
     <Setter Property="MinHeight" Value="{DynamicResource Touch.MinTarget}" />
+    <Setter Property="behaviors:NativeTextInputOverlay.ForwardEnterKey" Value="True" />
     <Setter Property="textInput:TextInputOptions.ContentType" Value="Normal" />
     <Setter Property="textInput:TextInputOptions.ReturnKeyType" Value="Return" />
     <Setter Property="textInput:TextInputOptions.Multiline" Value="True" />

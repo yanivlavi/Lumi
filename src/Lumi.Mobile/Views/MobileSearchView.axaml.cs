@@ -4,6 +4,7 @@ using Avalonia.Input;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Lumi.Mobile.Behaviors;
 
 namespace Lumi.Mobile.Views;
 
@@ -41,6 +42,9 @@ public partial class MobileSearchView : UserControl
         Dispatcher.UIThread.Post(() =>
         {
             if (!IsEffectivelyVisible || this.FindControl<TextBox>("SearchField") is not { } field)
+                return;
+
+            if (NativeTextInputOverlay.TryFocus(field))
                 return;
 
             field.Focus(NavigationMethod.Unspecified);

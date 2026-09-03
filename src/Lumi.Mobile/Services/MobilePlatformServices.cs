@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using Avalonia;
+using Avalonia.Input;
 using Avalonia.Platform;
 using Lumi.Mobile.Views;
 
@@ -17,6 +19,77 @@ public interface ITextSelectionPresenter
     void Show(string text);
 
     void Dismiss();
+}
+
+internal readonly record struct NativeTextInputOverlayOptions(
+    bool IsMultiline,
+    int MaxLength,
+    string Placeholder,
+    string InputMode,
+    string EnterKeyHint,
+    bool IsSensitive,
+    bool AutoCapitalization,
+    bool ShowSuggestions,
+    bool IsEnabled,
+    string FontFamily,
+    double FontSize,
+    int FontWeight,
+    string FontStyle,
+    double LineHeight,
+    double LetterSpacing,
+    Thickness Padding,
+    string TextAlignment,
+    string Direction,
+    bool IsDark);
+
+internal interface INativeTextInputOverlaySession : IDisposable
+{
+    int CaretIndex { get; }
+
+    void Show(
+        Rect bounds,
+        Rect clipBounds,
+        string value,
+        NativeTextInputOverlayOptions options);
+
+    void Hide();
+
+    void FocusAt(int caretIndex);
+}
+
+internal interface INativeTextInputOverlayPresenter
+{
+    bool IsAvailable { get; }
+
+    INativeTextInputOverlaySession Create(
+        Action<string, int> textChanged,
+        Func<Key, KeyModifiers, bool> keyPressed,
+        Action<bool> focusChanged);
+}
+
+public interface IMobileHostEnvironment
+{
+    bool HasFixedEndpoint { get; }
+
+    string? FixedBaseUrl { get; }
+
+    string FixedEndpointName { get; }
+}
+
+public interface IRemoteDownloadStore
+{
+    string? TryGet(string category, string key);
+
+    Task<string> StoreAsync(
+        string category,
+        string key,
+        string fileName,
+        string contentType,
+        Stream source,
+        long maxBytes,
+        CancellationToken cancellationToken);
+
+    void Release(string category, string key);
 }
 
 internal interface INativeComposerEditorFactory
@@ -56,6 +129,14 @@ public static class MobilePlatformServices
     public static ITextSelectionPresenter TextSelectionPresenter { get; set; } =
         new DefaultTextSelectionPresenter();
 
+    internal static INativeTextInputOverlayPresenter TextInputOverlayPresenter { get; set; } =
+        new DefaultNativeTextInputOverlayPresenter();
+
+    public static IMobileHostEnvironment HostEnvironment { get; set; } =
+        new DefaultMobileHostEnvironment();
+
+    public static string? DeviceNameOverride { get; set; }
+
     internal static INativeComposerEditorFactory NativeComposerEditorFactory { get; set; } =
         new DefaultNativeComposerEditorFactory();
 
@@ -64,6 +145,13 @@ public static class MobilePlatformServices
     {
         if (expected is null || ReferenceEquals(TextSelectionPresenter, expected))
             TextSelectionPresenter = new DefaultTextSelectionPresenter();
+    }
+
+    internal static void ResetTextInputOverlayPresenter(
+        INativeTextInputOverlayPresenter? expected = null)
+    {
+        if (expected is null || ReferenceEquals(TextInputOverlayPresenter, expected))
+            TextInputOverlayPresenter = new DefaultNativeTextInputOverlayPresenter();
     }
 
     internal static void ResetNativeComposerEditorFactory(
@@ -187,6 +275,27 @@ internal sealed class DefaultTextSelectionPresenter : ITextSelectionPresenter
     public void Dismiss()
     {
     }
+}
+
+internal sealed class DefaultNativeTextInputOverlayPresenter : INativeTextInputOverlayPresenter
+{
+    public bool IsAvailable => false;
+
+    public INativeTextInputOverlaySession Create(
+        Action<string, int> textChanged,
+        Func<Key, KeyModifiers, bool> keyPressed,
+        Action<bool> focusChanged) =>
+        throw new PlatformNotSupportedException(
+            "A native text input overlay is not registered on this platform.");
+}
+
+internal sealed class DefaultMobileHostEnvironment : IMobileHostEnvironment
+{
+    public bool HasFixedEndpoint => false;
+
+    public string? FixedBaseUrl => null;
+
+    public string FixedEndpointName => "Lumi";
 }
 
 internal sealed class DefaultNativeComposerEditorFactory : INativeComposerEditorFactory

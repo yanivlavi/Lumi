@@ -44,6 +44,7 @@ public sealed class LumiRemoteClient : IAsyncDisposable
     private readonly TimeSpan _commandConfirmationDeadline;
     private readonly TimeSpan _uploadDeadline;
     private readonly IRemoteRouteVerifier _routeVerifier;
+    private readonly IRemoteDownloadStore? _downloadStore;
 
     private CancellationTokenSource? _streamCts;
     private Task? _streamTask;
@@ -56,8 +57,18 @@ public sealed class LumiRemoteClient : IAsyncDisposable
     private volatile bool _hasCompatibleBootstrap;
     private bool _disposed;
 
-    public LumiRemoteClient(string deviceId, string deviceName, HttpMessageHandler? handler = null)
-        : this(deviceId, deviceName, handler, DefaultRequestDeadline, DefaultUploadDeadline)
+    public LumiRemoteClient(
+        string deviceId,
+        string deviceName,
+        HttpMessageHandler? handler = null,
+        IRemoteDownloadStore? downloadStore = null)
+        : this(
+            deviceId,
+            deviceName,
+            handler,
+            DefaultRequestDeadline,
+            DefaultUploadDeadline,
+            downloadStore: downloadStore)
     {
     }
 
@@ -68,7 +79,8 @@ public sealed class LumiRemoteClient : IAsyncDisposable
         TimeSpan requestDeadline,
         TimeSpan uploadDeadline,
         IRemoteRouteVerifier? routeVerifier = null,
-        TimeSpan? commandConfirmationDeadline = null)
+        TimeSpan? commandConfirmationDeadline = null,
+        IRemoteDownloadStore? downloadStore = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(requestDeadline, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(uploadDeadline, TimeSpan.Zero);
@@ -79,6 +91,7 @@ public sealed class LumiRemoteClient : IAsyncDisposable
         _commandConfirmationDeadline = commandConfirmationDeadline ?? requestDeadline;
         _uploadDeadline = uploadDeadline;
         _routeVerifier = routeVerifier ?? RemotePlatformServices.RouteVerifier;
+        _downloadStore = downloadStore;
 
         var transport = handler ?? CreateDefaultHandler();
         _http = new HttpClient(
@@ -147,12 +160,18 @@ public sealed class LumiRemoteClient : IAsyncDisposable
         if (trimmed.Length == 0)
             return "";
 
-        if (!trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-            !trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        var hadExplicitScheme =
+            trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+        if (!hadExplicitScheme)
             trimmed = "http://" + trimmed;
 
-        // A bare host means the well-known port.
-        return Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) && uri.IsDefaultPort
+        // A bare host means the well-known port. An explicit HTTPS origin must retain its default
+        // port so browser-hosted Lumi works behind Tailscale Serve on 443.
+        return Uri.TryCreate(trimmed, UriKind.Absolute, out var uri)
+               && uri.IsDefaultPort
+               && (!hadExplicitScheme
+                   || string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
             ? $"{uri.Scheme}://{uri.Host}:{RemoteProtocol.DefaultPort}"
             : trimmed;
     }
@@ -641,6 +660,19 @@ public sealed class LumiRemoteClient : IAsyncDisposable
             var target = Path.Combine(folder, $"{Guid.NewGuid():N}-{safeName}");
 
             await using var source = await response.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);
+            if (_downloadStore is not null)
+            {
+                return await _downloadStore.StoreAsync(
+                        "produced-files",
+                        $"{chatId:N}-{messageId:N}-{fileName}",
+                        fileName,
+                        response.Content.Headers.ContentType?.MediaType ?? "application/octet-stream",
+                        source,
+                        RemoteProtocol.MaxDownloadBytes,
+                        deadline.Token)
+                    .ConfigureAwait(false);
+            }
+
             await using var destination = new FileStream(
                 target,
                 FileMode.CreateNew,
@@ -698,6 +730,17 @@ public sealed class LumiRemoteClient : IAsyncDisposable
     {
         if (BaseUrl is not { Length: > 0 })
             return null;
+
+        if (_downloadStore is not null)
+        {
+            return await DownloadMarkdownImageToStoreAsync(
+                    chatId,
+                    messageId,
+                    imageIndex,
+                    fileName,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         var folder = Path.Combine(Path.GetTempPath(), "LumiMobile", "markdown-images");
         Directory.CreateDirectory(folder);
@@ -780,6 +823,7 @@ public sealed class LumiRemoteClient : IAsyncDisposable
                             .ConfigureAwait(false);
                     }
                 }
+
                 finally
                 {
                     ArrayPool<byte>.Shared.Return(buffer);
@@ -820,6 +864,95 @@ public sealed class LumiRemoteClient : IAsyncDisposable
         finally
         {
             MarkdownImageDownloadGate.Release();
+        }
+    }
+
+    private async Task<string?> DownloadMarkdownImageToStoreAsync(
+        Guid chatId,
+        Guid messageId,
+        int imageIndex,
+        string fileName,
+        CancellationToken cancellationToken)
+    {
+        var key = $"{chatId:N}-{messageId:N}-{imageIndex}";
+        if (_downloadStore!.TryGet("markdown-images", key) is { Length: > 0 } cached)
+            return cached;
+
+        using var deadline = CreateDeadline(cancellationToken, _uploadDeadline);
+        try
+        {
+            await MarkdownImageDownloadGate.WaitAsync(deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (IsDeadlineCancellation(cancellationToken, deadline))
+        {
+            return null;
+        }
+
+        try
+        {
+            if (_downloadStore.TryGet("markdown-images", key) is { Length: > 0 } stored)
+                return stored;
+
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"{BaseUrl}{RemoteProtocol.Routes.MarkdownImage}" +
+                $"?chatId={chatId}&messageId={messageId}&imageIndex={imageIndex}");
+            ApplyAuth(request);
+            using var response = await _http
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token)
+                .ConfigureAwait(false);
+            if (response.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                SetState(RemoteLinkState.Unauthorized, "This device is no longer paired with Lumi.");
+                return null;
+            }
+            if (!response.IsSuccessStatusCode
+                || response.Content.Headers.ContentLength is > RemoteProtocol.MaxMarkdownImageBytes)
+            {
+                return null;
+            }
+
+            await using var source = await response.Content
+                .ReadAsStreamAsync(deadline.Token)
+                .ConfigureAwait(false);
+            return await _downloadStore.StoreAsync(
+                    "markdown-images",
+                    key,
+                    fileName,
+                    response.Content.Headers.ContentType?.MediaType ?? "application/octet-stream",
+                    source,
+                    RemoteProtocol.MaxMarkdownImageBytes,
+                    deadline.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (IsDeadlineCancellation(cancellationToken, deadline))
+        {
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Trace.TraceWarning($"[Mobile] Inline image download failed: {ex}");
+            return null;
+        }
+        finally
+        {
+            MarkdownImageDownloadGate.Release();
+        }
+    }
+
+    public void ReleaseMarkdownImages(
+        Guid chatId,
+        Guid messageId,
+        IReadOnlyList<RemoteInlineImage> images)
+    {
+        if (_downloadStore is null)
+            return;
+
+        foreach (var image in images)
+        {
+            _downloadStore.Release(
+                "markdown-images",
+                $"{chatId:N}-{messageId:N}-{image.Index}");
         }
     }
 

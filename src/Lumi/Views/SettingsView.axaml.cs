@@ -82,6 +82,7 @@ public partial class SettingsView : UserControl
         [
             this.FindControl<Control>("PageProfile"),
             this.FindControl<Control>("PageGeneral"),
+            this.FindControl<Control>("PageMobile"),
             this.FindControl<Control>("PageAppearance"),
             this.FindControl<Control>("PageChat"),
             this.FindControl<Control>("PageAI"),

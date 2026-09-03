@@ -75,7 +75,7 @@
                              Text="Connect to your PC"
                              FontSize="{DynamicResource Font.SizeTitle}"
                              FontWeight="SemiBold" />
-                  <TextBlock Text="Follow the three quick steps below. Tailscale keeps the connection encrypted."
+                  <TextBlock Text="Open the setup link from Lumi Desktop, or connect manually below."
                              Classes="muted"
                              TextWrapping="Wrap" />
                 </StackPanel>
@@ -84,7 +84,7 @@
                   <StackPanel Spacing="4">
                     <TextBlock Text="On your PC"
                                FontWeight="SemiBold" />
-                    <TextBlock Text="Open Lumi → Settings → Phone, turn on phone access, then copy the Tailscale address."
+                    <TextBlock Text="Open Lumi → Settings → Mobile, turn on phone access, then choose Web app or Android app."
                                Classes="muted"
                                TextWrapping="Wrap" />
                   </StackPanel>
@@ -94,9 +94,9 @@
                         Margin="0,2,0,0">
                   <StackPanel Spacing="10">
                     <StackPanel Spacing="2">
-                      <TextBlock Text="Tailscale address"
+                      <TextBlock Text="PC address"
                                  FontWeight="SemiBold" />
-                      <TextBlock Text="It usually starts with 100."
+                      <TextBlock Text="Use the address shown by Lumi Desktop."
                                  Classes="muted"
                                  TextWrapping="Wrap" />
                     </StackPanel>
@@ -197,7 +197,7 @@
                   <TextBlock Text="Enter the 6-digit code"
                              FontSize="{DynamicResource Font.SizeTitle}"
                              FontWeight="SemiBold" />
-                  <TextBlock Text="On your PC, tap “Pair a device” in Settings → Phone, then enter the code below."
+                  <TextBlock Text="Enter the code shown in Lumi Desktop → Settings → Mobile."
                              Classes="muted"
                              TextWrapping="Wrap" />
                 </StackPanel>
@@ -235,7 +235,7 @@
                             Classes="touch accent"
                             HorizontalAlignment="Stretch"
                             HorizontalContentAlignment="Center"
-                            Content="Connect phone"
+                            Content="{Binding PairActionText}"
                             Command="{Binding SubmitCodeCommand}"
                             IsEnabled="{Binding CanSubmitCode}" />
                   </StackPanel>
@@ -246,6 +246,7 @@
                         HorizontalAlignment="Stretch"
                         HorizontalContentAlignment="Center"
                         Content="Use a different PC"
+                        IsVisible="{Binding CanChooseDifferentPc}"
                         Command="{Binding BackCommand}" />
               </StackPanel>
 

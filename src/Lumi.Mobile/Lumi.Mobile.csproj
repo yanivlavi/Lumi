@@ -20,6 +20,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Lumi.Mobile.Tests" />
     <InternalsVisibleTo Include="Lumi.Mobile.Android" />
+    <InternalsVisibleTo Include="Lumi.Mobile.Browser" />
   </ItemGroup>
 
   <ItemGroup>
@@ -37,6 +38,10 @@
 
   <ItemGroup>
     <AvaloniaResource Include="..\Lumi\Assets\lumi-icon.png" Link="Assets\lumi-icon.png" />
+    <AvaloniaResource Include="Assets\Fonts\NotoSansHebrew-Regular.ttf" />
+    <AvaloniaResource Include="Assets\Fonts\NotoSansHebrew-OFL.txt" />
+    <AvaloniaResource Include="Assets\Fonts\NotoColorEmoji-Regular.ttf" />
+    <AvaloniaResource Include="Assets\Fonts\NotoEmoji-OFL.txt" />
   </ItemGroup>
 
 </Project>

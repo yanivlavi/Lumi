@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-browser</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>preview</LangVersion>
+    <RootNamespace>Lumi.Mobile.Browser</RootNamespace>
+    <AssemblyName>Lumi.Mobile.Browser</AssemblyName>
+    <PublishTrimmed>true</PublishTrimmed>
+    <WasmEnableThreads>false</WasmEnableThreads>
+    <WasmBuildNative>true</WasmBuildNative>
+    <EnableDefaultCompressionFormats Condition="'$(Configuration)' == 'Release'">false</EnableDefaultCompressionFormats>
+    <PublishCompressionFormats Condition="'$(Configuration)' == 'Release'">brotli</PublishCompressionFormats>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Browser" Version="$(AvaloniaVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Lumi.Mobile\Lumi.Mobile.csproj" />
+  </ItemGroup>
+
+  <!-- Mobile browsers support Brotli; gzip duplicates and source maps only inflate desktop installers. -->
+  <Target Name="RemoveRedundantReleaseAssets"
+          AfterTargets="Publish"
+          Condition="'$(Configuration)' == 'Release'">
+    <ItemGroup>
+      <RedundantReleaseAsset Include="$(PublishDir)wwwroot\**\*.gz" />
+      <RedundantReleaseAsset Include="$(PublishDir)wwwroot\**\*.map" />
+      <RedundantReleaseAsset Include="$(PublishDir)wwwroot\**\*.map.br" />
+    </ItemGroup>
+    <Delete Files="@(RedundantReleaseAsset)" />
+  </Target>
+
+</Project>

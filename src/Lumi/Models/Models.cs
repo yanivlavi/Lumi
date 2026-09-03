@@ -1215,8 +1215,8 @@ public class UserSettings
     public int RemoteAccessPort { get; set; }
 
     /// <summary>
-    /// Allows plaintext HTTP from ordinary RFC1918/link-local peers. Off by default: loopback and
-    /// Tailscale remain available through their authenticated encrypted tunnel.
+    /// Legacy persisted security gate for the user's selected mobile transport. True means the user
+    /// explicitly selected Local Wi-Fi; false means only verified Tailscale sockets are accepted.
     /// </summary>
     public bool RemoteAllowInsecureLan { get; set; }
 

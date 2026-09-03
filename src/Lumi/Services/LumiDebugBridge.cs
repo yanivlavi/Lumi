@@ -1600,11 +1600,12 @@ internal sealed class LumiDebugBridge : IAsyncDisposable
         {
             "profile" => 0,
             "general" => 1,
-            "appearance" => 2,
-            "chat" => 3,
-            "aimodels" or "models" or "ai" => 4,
-            "privacy" or "privacydata" or "data" => 5,
-            "about" or "updates" or "update" => 6,
+            "mobile" or "phone" or "iphone" or "android" => 2,
+            "appearance" => 3,
+            "chat" => 4,
+            "aimodels" or "models" or "ai" => 5,
+            "privacy" or "privacydata" or "data" => 6,
+            "about" or "updates" or "update" => 7,
             _ => throw new InvalidOperationException($"Unknown settings page '{page}'.")
         };
     }

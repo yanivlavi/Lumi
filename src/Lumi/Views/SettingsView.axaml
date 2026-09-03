@@ -39,6 +39,13 @@
         </Transitions>
       </Setter>
     </Style>
+    <Style Selector="Button.mobile-transport.selected /template/ Border#PART_Surface">
+      <Setter Property="Background" Value="{DynamicResource Brush.AccentSubtle}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Brush.AccentDefault}" />
+    </Style>
+    <Style Selector="Button.mobile-transport.selected TextBlock.mobile-transport-title">
+      <Setter Property="Foreground" Value="{DynamicResource Brush.AccentDefault}" />
+    </Style>
     <Style Selector="sc|StrataSetting.stacked-content /template/ Grid#PART_Row > Border#PART_HighlightBar">
       <Setter Property="Grid.RowSpan" Value="2" />
     </Style>
@@ -167,43 +174,222 @@
           </sc:StrataSetting>
         </sc:StrataSettingGroup>
 
+      </StackPanel>
+
+    <!-- ═══ Page 2: Mobile ═══ -->
+      <StackPanel x:Name="PageMobile" Classes="motion-surface" IsVisible="False" Spacing="20" Margin="36,24,36,36" MaxWidth="560">
+        <StackPanel Spacing="4">
+          <TextBlock Text="{loc:Str Settings_Mobile}" FontSize="{DynamicResource Font.SizeTitle}" FontWeight="SemiBold" />
+          <TextBlock Text="{loc:Str Settings_MobileDesc}" FontSize="{DynamicResource Font.SizeCaption}"
+                     Foreground="{DynamicResource Brush.TextTertiary}" />
+        </StackPanel>
+
         <sc:StrataSettingGroup Header="{loc:Str SettingsGroup_Phone}"
-                               IsEnabled="{Binding CanManageRemoteSecurity}">
+                              IsEnabled="{Binding CanManageRemoteSecurity}">
           <sc:StrataSetting Header="{loc:Str Setting_RemoteAccess}" Description="{loc:Str SettingDesc_RemoteAccess}">
             <ToggleSwitch x:Name="RemoteAccessToggle"
                           IsEnabled="{Binding CanManageRemoteSecurity}"
                           IsChecked="{Binding RemoteAccessEnabled}" />
           </sc:StrataSetting>
-          <sc:StrataSetting Header="{loc:Str Setting_RemoteInsecureLan}"
-                            Description="{loc:Str SettingDesc_RemoteInsecureLan}">
-            <ToggleSwitch x:Name="RemoteInsecureLanToggle"
-                          IsEnabled="{Binding RemoteAccessEnabled}"
-                          IsChecked="{Binding RemoteAllowInsecureLan}" />
-          </sc:StrataSetting>
-          <sc:StrataSetting Header="{loc:Str Setting_RemotePairing}" Description="{loc:Str SettingDesc_RemotePairing}">
-            <StackPanel Spacing="6" HorizontalAlignment="Right">
-              <Button x:Name="RemotePairButton" Classes="subtle motion-action" Padding="14,6" MinHeight="0"
-                      HorizontalAlignment="Right"
-                      IsEnabled="{Binding RemoteAccessEnabled}"
-                      Command="{Binding ToggleRemotePairingCommand}"
-                      FontSize="{DynamicResource Font.SizeCaption}">
-                <TextBlock Text="{Binding RemotePairActionText}" />
+          <sc:StrataSetting Classes="stacked-content"
+                            Header="{loc:Str Setting_MobileConnection}"
+                            Description="{Binding MobileTransportDescription}"
+                            IsVisible="{Binding RemoteAccessEnabled}">
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+              <Button x:Name="MobileUseTailscaleButton"
+                      Grid.Column="0"
+                      Classes="subtle motion-action mobile-transport"
+                      Classes.selected="{Binding IsMobileTailscaleSelected}"
+                      MinHeight="92"
+                      Padding="14"
+                      HorizontalContentAlignment="Stretch"
+                      VerticalContentAlignment="Stretch"
+                      IsEnabled="{Binding IsMobileTailscaleAvailable}"
+                      Command="{Binding SelectMobileTailscaleCommand}">
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                  <PathIcon Width="22" Height="22"
+                            Foreground="{DynamicResource Brush.AccentDefault}"
+                            Data="M12 2 4 6v6c0 4.42 3.05 8.44 8 9.8 4.95-1.36 8-5.38 8-9.8V6l-8-4zm0 4.5 4 2v3.5c0 2.5-1.7 4.8-4 5.7-2.3-.9-4-3.2-4-5.7V8.5l4-2z" />
+                  <StackPanel Grid.Column="1" Spacing="4">
+                    <TextBlock Classes="mobile-transport-title"
+                               Text="{loc:Str Remote_TransportTailscaleTitle}"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="{loc:Str Remote_TransportTailscaleDesc}"
+                               TextWrapping="Wrap"
+                               FontSize="{DynamicResource Font.SizeCaption}"
+                               Foreground="{DynamicResource Brush.TextSecondary}" />
+                  </StackPanel>
+                </Grid>
               </Button>
-              <Border x:Name="RemotePairCodePanel" IsVisible="{Binding IsRemotePairing}"
+              <Button x:Name="MobileUseLocalNetworkButton"
+                      Grid.Column="1"
+                      Classes="subtle motion-action mobile-transport"
+                      Classes.selected="{Binding IsMobileLocalNetworkSelected}"
+                      MinHeight="92"
+                      Padding="14"
+                      HorizontalContentAlignment="Stretch"
+                      VerticalContentAlignment="Stretch"
+                      Command="{Binding SelectMobileLocalNetworkCommand}">
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                  <PathIcon Width="22" Height="22"
+                            Foreground="{DynamicResource Brush.AccentDefault}"
+                            Data="M1 9l2 2c5-5 13-5 18 0l2-2C16.85 2.85 7.15 2.85 1 9zm4 4 2 2c2.76-2.76 7.24-2.76 10 0l2-2c-3.87-3.87-10.13-3.87-14 0zm4 4 3 3 3-3c-1.66-1.66-4.34-1.66-6 0z" />
+                  <StackPanel Grid.Column="1" Spacing="4">
+                    <TextBlock Classes="mobile-transport-title"
+                               Text="{loc:Str Remote_TransportLocalTitle}"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="{loc:Str Remote_TransportLocalDesc}"
+                               TextWrapping="Wrap"
+                               FontSize="{DynamicResource Font.SizeCaption}"
+                               Foreground="{DynamicResource Brush.TextSecondary}" />
+                  </StackPanel>
+                </Grid>
+              </Button>
+            </Grid>
+          </sc:StrataSetting>
+          <sc:StrataSetting Classes="stacked-content"
+                           Header="{loc:Str Setting_MobileChoose}"
+                           Description="{loc:Str SettingDesc_MobileChoose}"
+                           IsVisible="{Binding RemoteAccessEnabled}">
+            <StackPanel Spacing="14">
+              <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                <Button x:Name="MobileWebSetupButton"
+                        Grid.Column="0"
+                        Classes="subtle motion-action"
+                        MinHeight="112"
+                        Padding="14"
+                        HorizontalContentAlignment="Stretch"
+                        VerticalContentAlignment="Stretch"
+                        IsEnabled="{Binding IsMobileSetupChoiceEnabled}"
+                        Command="{Binding StartMobileWebSetupCommand}">
+                  <StackPanel Spacing="8">
+                    <PathIcon Width="24" Height="24"
+                             Foreground="{DynamicResource Brush.AccentDefault}"
+                             Data="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm6.92 6h-3.03a15.7 15.7 0 0 0-1.38-3.56A8.06 8.06 0 0 1 18.92 8zM12 4c.83 1.2 1.54 2.53 1.93 4h-3.86C10.46 6.53 11.17 5.2 12 4zM4.26 14a7.8 7.8 0 0 1 0-4h3.39a16.4 16.4 0 0 0 0 4H4.26zm.82 2h3.03c.3 1.27.77 2.47 1.38 3.56A8.06 8.06 0 0 1 5.08 16zm3.03-8H5.08a8.06 8.06 0 0 1 4.41-3.56A15.7 15.7 0 0 0 8.11 8zM12 20c-.83-1.2-1.54-2.53-1.93-4h3.86c-.39 1.47-1.1 2.8-1.93 4zm2.34-6H9.66a14.4 14.4 0 0 1 0-4h4.68a14.4 14.4 0 0 1 0 4zm.17 5.56A15.7 15.7 0 0 0 15.89 16h3.03a8.06 8.06 0 0 1-4.41 3.56zM16.35 14a16.4 16.4 0 0 0 0-4h3.39a7.8 7.8 0 0 1 0 4h-3.39z" />
+                    <TextBlock Text="{loc:Str Remote_SetupWebTitle}"
+                              FontWeight="SemiBold" />
+                    <TextBlock Text="{loc:Str Remote_SetupWebDesc}"
+                              TextWrapping="Wrap"
+                              FontSize="{DynamicResource Font.SizeCaption}"
+                              Foreground="{DynamicResource Brush.TextSecondary}" />
+                  </StackPanel>
+                </Button>
+                <Button x:Name="MobileAndroidSetupButton"
+                        Grid.Column="1"
+                        Classes="subtle motion-action"
+                        MinHeight="112"
+                        Padding="14"
+                        HorizontalContentAlignment="Stretch"
+                        VerticalContentAlignment="Stretch"
+                        IsEnabled="{Binding IsMobileSetupChoiceEnabled}"
+                        Command="{Binding StartMobileAndroidSetupCommand}">
+                  <StackPanel Spacing="8">
+                    <PathIcon Width="24" Height="24"
+                             Foreground="{DynamicResource Brush.AccentDefault}"
+                             Data="M7.2 5.3 5.8 2.9 6.7 2.4 8.1 4.8A8.5 8.5 0 0 1 12 3.9c1.4 0 2.7.3 3.9.9l1.4-2.4.9.5-1.4 2.4A7.4 7.4 0 0 1 20 11H4a7.4 7.4 0 0 1 3.2-5.7zM8 8.5A1 1 0 1 0 8 6.5a1 1 0 0 0 0 2zm8 0a1 1 0 1 0 0-2 1 1 0 0 0 0 2zM4 12h16v7a2 2 0 0 1-2 2h-1v2h-2v-2H9v2H7v-2H6a2 2 0 0 1-2-2v-7z" />
+                    <TextBlock Text="{loc:Str Remote_SetupAndroidTitle}"
+                              FontWeight="SemiBold" />
+                    <TextBlock Text="{loc:Str Remote_SetupAndroidDesc}"
+                              TextWrapping="Wrap"
+                              FontSize="{DynamicResource Font.SizeCaption}"
+                              Foreground="{DynamicResource Brush.TextSecondary}" />
+                  </StackPanel>
+                </Button>
+              </Grid>
+
+              <Border x:Name="MobileSetupPanel"
+                      IsVisible="{Binding IsMobileSetupActive}"
                       Background="{DynamicResource Brush.Surface2}"
-                      CornerRadius="{DynamicResource Radius.Interactive}" Padding="12,8">
-                <StackPanel Spacing="2">
-                  <TextBlock Text="{loc:Str Remote_PairCodeLabel}"
-                             FontSize="{DynamicResource Font.SizeCaption}"
-                             Foreground="{DynamicResource Brush.TextTertiary}" />
-                  <TextBlock x:Name="RemotePairCodeText" Text="{Binding RemotePairingCode}"
-                             FontSize="{DynamicResource Font.SizeHeadline}" FontWeight="SemiBold"
-                             LetterSpacing="4" HorizontalAlignment="Center" />
+                      BorderBrush="{DynamicResource Brush.BorderSubtle}"
+                      BorderThickness="1"
+                      CornerRadius="{DynamicResource Radius.Interactive}"
+                      Padding="16">
+                <StackPanel Spacing="12">
+                  <StackPanel Spacing="3">
+                    <TextBlock Text="{Binding MobileSetupTitle}"
+                              FontSize="{DynamicResource Font.SizeSubtitle}"
+                              FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding MobileSetupDescription}"
+                              TextWrapping="Wrap"
+                              Foreground="{DynamicResource Brush.TextSecondary}" />
+                  </StackPanel>
+
+                  <StackPanel IsVisible="{Binding IsMobileSetupReady}"
+                             Spacing="10">
+                    <TextBlock Text="{loc:Str Remote_SetupScan}"
+                              HorizontalAlignment="Center"
+                              FontWeight="SemiBold" />
+                    <Border Width="216" Height="216"
+                           HorizontalAlignment="Center"
+                           Background="White"
+                           CornerRadius="12"
+                           Padding="4">
+                      <ctrl:QrCodeControl x:Name="MobileSetupQrCode"
+                                         Value="{Binding MobileSetupQrValue}"
+                                         HorizontalAlignment="Stretch"
+                                         VerticalAlignment="Stretch" />
+                    </Border>
+                    <TextBlock Text="{Binding MobileSetupConnectionText}"
+                              TextAlignment="Center"
+                              TextWrapping="Wrap"
+                              FontSize="{DynamicResource Font.SizeCaption}"
+                              Foreground="{DynamicResource Brush.TextTertiary}" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                      <TextBlock Text="{Binding MobileSetupUrl}"
+                                TextWrapping="Wrap"
+                                VerticalAlignment="Center"
+                                FontSize="{DynamicResource Font.SizeCaption}"
+                                Foreground="{DynamicResource Brush.AccentDefault}" />
+                      <Button x:Name="MobileSetupCopyButton"
+                             Grid.Column="1"
+                             Classes="subtle motion-action"
+                             Padding="12,5"
+                             MinHeight="0"
+                             Command="{Binding CopyMobileSetupLinkCommand}"
+                             Content="{loc:Str Remote_SetupCopyLink}" />
+                    </Grid>
+                    <TextBlock Text="{Binding MobileSetupInstructions}"
+                              TextWrapping="Wrap"
+                              FontSize="{DynamicResource Font.SizeCaption}"
+                              Foreground="{DynamicResource Brush.TextSecondary}" />
+                  </StackPanel>
+
+                  <Border Background="{DynamicResource Brush.Surface1}"
+                          CornerRadius="{DynamicResource Radius.Interactive}"
+                          Padding="12">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                      <StackPanel Spacing="2">
+                        <TextBlock Text="{loc:Str Remote_SetupPairCode}"
+                                  FontSize="{DynamicResource Font.SizeCaption}"
+                                  Foreground="{DynamicResource Brush.TextTertiary}" />
+                        <TextBlock x:Name="RemotePairCodeText"
+                                  Text="{Binding RemotePairingCode}"
+                                  IsVisible="{Binding IsRemotePairing}"
+                                  FontSize="{DynamicResource Font.SizeHeadline}"
+                                  FontWeight="SemiBold"
+                                  LetterSpacing="4" />
+                        <TextBlock Text="{loc:Str Remote_SetupCodeHelp}"
+                                  FontSize="{DynamicResource Font.SizeCaption}"
+                                  Foreground="{DynamicResource Brush.TextTertiary}" />
+                      </StackPanel>
+                      <Button x:Name="RemotePairButton"
+                             Grid.Column="1"
+                             Classes="subtle motion-action"
+                             Padding="12,6"
+                             MinHeight="0"
+                             VerticalAlignment="Center"
+                             IsEnabled="{Binding RemoteAccessEnabled}"
+                             Command="{Binding ToggleRemotePairingCommand}"
+                             Content="{Binding RemotePairActionText}" />
+                    </Grid>
+                  </Border>
                 </StackPanel>
               </Border>
             </StackPanel>
           </sc:StrataSetting>
-          <sc:StrataSetting Header="{Binding RemoteDevicesText}" Description="{Binding RemoteStatusText}">
+          <sc:StrataSetting Classes="stacked-content"
+                            Header="{Binding RemoteDevicesText}"
+                            Description="{Binding RemoteStatusText}">
             <ItemsControl ItemsSource="{Binding RemoteDevices}"
                           HorizontalAlignment="Stretch">
               <ItemsControl.ItemTemplate>
@@ -212,26 +398,27 @@
                     <StackPanel Spacing="2" VerticalAlignment="Center">
                       <TextBlock Text="{Binding DeviceName}" FontWeight="SemiBold" />
                       <TextBlock Text="{Binding LastSeenText}"
-                                 FontSize="{DynamicResource Font.SizeCaption}"
-                                 Foreground="{DynamicResource Brush.TextTertiary}" />
+                                FontSize="{DynamicResource Font.SizeCaption}"
+                                Foreground="{DynamicResource Brush.TextTertiary}" />
                     </StackPanel>
                     <Button Grid.Column="1"
-                            Classes="subtle motion-action"
-                            Padding="12,5"
-                            MinHeight="0"
-                            Content="{loc:Str Remote_RevokeDevice}"
-                            IsEnabled="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).CanManageRemoteSecurity}"
-                            Command="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).RevokeRemoteDeviceCommand}"
-                            CommandParameter="{Binding}" />
+                           Classes="subtle motion-action"
+                           Padding="12,5"
+                           MinHeight="0"
+                           Content="{loc:Str Remote_RevokeDevice}"
+                           IsEnabled="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).CanManageRemoteSecurity}"
+                           Command="{Binding $parent[UserControl].((vm:SettingsViewModel)DataContext).RevokeRemoteDeviceCommand}"
+                           CommandParameter="{Binding}" />
                   </Grid>
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
           </sc:StrataSetting>
         </sc:StrataSettingGroup>
+
       </StackPanel>
 
-    <!-- ═══ Page 2: Appearance ═══ -->
+    <!-- ═══ Page 3: Appearance ═══ -->
       <StackPanel x:Name="PageAppearance" Classes="motion-surface" IsVisible="False" Spacing="20" Margin="36,24,36,36" MaxWidth="560">
         <StackPanel Spacing="4">
           <TextBlock Text="{loc:Str Settings_Appearance}" FontSize="{DynamicResource Font.SizeTitle}" FontWeight="SemiBold" />
@@ -285,7 +472,7 @@
         </sc:StrataSettingGroup>
       </StackPanel>
 
-    <!-- ═══ Page 3: Chat ═══ -->
+    <!-- ═══ Page 4: Chat ═══ -->
       <StackPanel x:Name="PageChat" Classes="motion-surface" IsVisible="False" Spacing="20" Margin="36,24,36,36" MaxWidth="560">
         <StackPanel Spacing="4">
           <TextBlock Text="{loc:Str Settings_Chat}" FontSize="{DynamicResource Font.SizeTitle}" FontWeight="SemiBold" />
@@ -327,7 +514,7 @@
         </sc:StrataSettingGroup>
       </StackPanel>
 
-    <!-- ═══ Page 4: AI & Models ═══ -->
+    <!-- ═══ Page 5: AI & Models ═══ -->
       <StackPanel x:Name="PageAI" Classes="motion-surface" IsVisible="False" Spacing="20" Margin="36,24,36,36" MaxWidth="560">
         <StackPanel Spacing="4">
           <TextBlock Text="{loc:Str Settings_AIModels}" FontSize="{DynamicResource Font.SizeTitle}" FontWeight="SemiBold" />
@@ -756,7 +943,7 @@
         </sc:StrataSettingGroup>
       </StackPanel>
 
-    <!-- ═══ Page 5: Privacy & Data ═══ -->
+    <!-- ═══ Page 6: Privacy & Data ═══ -->
       <StackPanel x:Name="PagePrivacy" Classes="motion-surface" IsVisible="False" Spacing="20" Margin="36,24,36,36" MaxWidth="560">
         <StackPanel Spacing="4">
           <TextBlock Text="{loc:Str Settings_PrivacyData}" FontSize="{DynamicResource Font.SizeTitle}" FontWeight="SemiBold" />
@@ -819,7 +1006,7 @@
         </sc:StrataSettingGroup>
       </StackPanel>
 
-    <!-- ═══ Page 6: About ═══ -->
+    <!-- ═══ Page 7: About ═══ -->
       <StackPanel x:Name="PageAbout" Classes="motion-surface" IsVisible="False" Spacing="20" Margin="36,24,36,36" MaxWidth="560">
         <StackPanel Spacing="4">
           <TextBlock Text="{loc:Str Settings_About}" FontSize="{DynamicResource Font.SizeTitle}" FontWeight="SemiBold" />

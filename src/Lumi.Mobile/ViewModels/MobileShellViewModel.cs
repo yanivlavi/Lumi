@@ -68,7 +68,7 @@ public sealed partial class MobileShellViewModel :
     IRemoteFileSuggestionSink,
     IAsyncDisposable
 {
-    private readonly MobileSettingsStore _store;
+    private readonly IMobileSettingsStore _store;
     private readonly MobileConnectionSettings _settings;
     private readonly Action<Action> _post;
     private readonly CancellationTokenSource _lifetime = new();
@@ -175,8 +175,8 @@ public sealed partial class MobileShellViewModel :
 
     public MobileShellViewModel(
         LumiRemoteClient? client = null,
-        LumiDiscoveryClient? discovery = null,
-        MobileSettingsStore? store = null,
+        ILumiDiscoveryClient? discovery = null,
+        IMobileSettingsStore? store = null,
         Action<Action>? post = null)
     {
         _store = store ?? new MobileSettingsStore();
@@ -192,7 +192,11 @@ public sealed partial class MobileShellViewModel :
         SearchChatList = new ChatListViewModel(this);
         Chat = new MobileChatViewModel(this, _post);
         Library = new LibraryViewModel(this);
-        Connect = new ConnectViewModel(Client, Discovery, OnPairedAsync);
+        Connect = new ConnectViewModel(
+            Client,
+            Discovery,
+            OnPairedAsync,
+            MobilePlatformServices.HostEnvironment);
         IsSidebarCollapsed = _settings.IsSidebarCollapsed;
 
         ChatList.ChatActivated += OnChatActivated;
@@ -283,7 +287,7 @@ public sealed partial class MobileShellViewModel :
 
     public LumiRemoteClient Client { get; }
 
-    public LumiDiscoveryClient Discovery { get; }
+    public ILumiDiscoveryClient Discovery { get; }
 
     public ConnectViewModel Connect { get; }
 
@@ -922,11 +926,17 @@ public sealed partial class MobileShellViewModel :
     /// </summary>
     public async Task StartAsync()
     {
+        var restartOnboarding = false;
         await _startGate.WaitAsync();
         try
         {
-            if (!IsPaired
-                || !_isApplicationActive
+            if (!IsPaired)
+            {
+                await Connect.InitializeAsync();
+                return;
+            }
+
+            if (!_isApplicationActive
                 || Client.BaseUrl is not { Length: > 0 } baseUrl)
             {
                 return;
@@ -956,20 +966,43 @@ public sealed partial class MobileShellViewModel :
             if (!Client.SupportsScopedEvents)
                 return;
 
-            if (Client.State is RemoteLinkState.Connecting or RemoteLinkState.Connected)
+            if (!hello.IsPaired)
+            {
+                ClearPairedState();
+                restartOnboarding = true;
+            }
+            else if (Client.State is RemoteLinkState.Connecting or RemoteLinkState.Connected)
             {
                 await Client.UpdateEventSubscriptionAsync(BuildEventSubscription(), request.Token);
-                return;
             }
-
-            if (!_isApplicationActive)
-                return;
-            await Client.StartEventStreamAsync(BuildEventSubscription());
+            else if (_isApplicationActive)
+            {
+                await Client.StartEventStreamAsync(BuildEventSubscription());
+            }
         }
         finally
         {
             _startGate.Release();
         }
+
+        if (restartOnboarding)
+            await Connect.InitializeAsync();
+    }
+
+    public Task HandleConnectionLaunchAsync(MobileConnectionLaunchRequest request)
+    {
+        if (!IsPaired)
+            return Connect.ApplyLaunchRequestAsync(request);
+
+        var current = Client.BaseUrl is { Length: > 0 } baseUrl
+            ? LumiRemoteClient.NormalizeBaseUrl(baseUrl)
+            : "";
+        if (string.Equals(current, request.BaseUrl, StringComparison.OrdinalIgnoreCase))
+            return Task.CompletedTask;
+
+        ConnectionMessage =
+            $"This phone is already paired with {HostName}. Disconnect it before connecting to another PC.";
+        return Task.CompletedTask;
     }
 
     private async Task OnPairedAsync(string baseUrl, string hostName)
@@ -1139,7 +1172,14 @@ public sealed partial class MobileShellViewModel :
         IsConnected = false;
         IsHostReady = false;
         HostName = "";
+        Connect.Reset();
         ResetHostScopedState();
+    }
+
+    private Task RestartOnboardingAsync()
+    {
+        ClearPairedState();
+        return Connect.InitializeAsync();
     }
 
     [RelayCommand]
@@ -1737,7 +1777,7 @@ public sealed partial class MobileShellViewModel :
                     IsConnected = true;
                     break;
                 case RemoteLinkState.Unauthorized:
-                    ClearPairedState();
+                    _ = RestartOnboardingAsync();
                     ConnectionMessage = message;
                     break;
                 default:
@@ -2066,6 +2106,12 @@ public sealed partial class MobileShellViewModel :
             return null;
         }
     }
+
+    public void ReleaseMarkdownImages(
+        Guid chatId,
+        Guid messageId,
+        IReadOnlyList<RemoteInlineImage> images) =>
+        Client.ReleaseMarkdownImages(chatId, messageId, images);
 
     public async Task<RemoteActivityDetails?> GetActivityDetailsAsync(
         Guid chatId,

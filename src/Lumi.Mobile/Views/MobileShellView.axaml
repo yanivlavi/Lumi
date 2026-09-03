@@ -23,9 +23,24 @@
   <Panel x:Name="Root">
 
     <!-- ═══ Onboarding: not paired with any PC yet ═══ -->
-    <ContentControl x:Name="ConnectHost" IsVisible="{Binding !IsPaired}">
-      <views:ConnectView x:Name="ConnectPage" DataContext="{Binding Connect}" />
-    </ContentControl>
+    <Grid x:Name="ConnectLayout"
+          ColumnDefinitions="Auto,Auto,*"
+          Height="{Binding UsableContentHeight}"
+          VerticalAlignment="Top"
+          IsVisible="{Binding !IsPaired}">
+      <Border x:Name="ConnectHingeLead"
+              Width="{Binding Layout.HingePosition}"
+              Background="{DynamicResource Brush.Surface0}" />
+      <Border x:Name="ConnectHingeGap"
+              Grid.Column="1"
+              Width="{Binding HingeGapWidth}"
+              Background="{DynamicResource Brush.Surface0}" />
+      <ContentControl x:Name="ConnectHost"
+                      Grid.Column="2"
+                      IsVisible="{Binding !IsPaired}">
+        <views:ConnectView x:Name="ConnectPage" DataContext="{Binding Connect}" />
+      </ContentControl>
+    </Grid>
 
     <!-- ═══ Main shell ═══ -->
     <!--

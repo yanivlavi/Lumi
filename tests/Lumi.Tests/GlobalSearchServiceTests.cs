@@ -663,6 +663,26 @@ public class GlobalSearchServiceTests
         Assert.Equal(older, results[1].Item);
     }
 
+    [Fact]
+    public async Task SearchAsync_SettingsUseCurrentPageIndexes()
+    {
+        var service = CreateService(new AppData());
+
+        var mobile = Assert.Single(
+            await service.SearchAsync("iPhone"),
+            static result => result.Category == GlobalSearchCategory.Settings);
+        var appearance = Assert.Single(
+            await service.SearchAsync("Dark Mode"),
+            static result => result.Category == GlobalSearchCategory.Settings);
+        var about = Assert.Single(
+            await service.SearchAsync("Version"),
+            static result => result.Category == GlobalSearchCategory.Settings);
+
+        Assert.Equal(2, mobile.SettingsPageIndex);
+        Assert.Equal(3, appearance.SettingsPageIndex);
+        Assert.Equal(7, about.SettingsPageIndex);
+    }
+
     private static GlobalSearchService CreateService(
         AppData data,
         IReadOnlyDictionary<Guid, ChatSearchSnapshot>? chatSnapshots = null)

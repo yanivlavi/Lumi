@@ -94,6 +94,7 @@ public sealed class RemoteRouteSecurityTests
     [Fact]
     public async Task UnauthorizedResponseClearsStoredCredentials()
     {
+        var previousHostEnvironment = MobilePlatformServices.HostEnvironment;
         var directory = Path.Combine(
             Path.GetTempPath(),
             "Lumi.Mobile.Tests",
@@ -101,17 +102,20 @@ public sealed class RemoteRouteSecurityTests
         Directory.CreateDirectory(directory);
         try
         {
+            MobilePlatformServices.HostEnvironment =
+                new FixedHostEnvironment("http://lumi.test");
             var store = new MobileSettingsStore(directory);
             var settings = store.Load();
-            settings.BaseUrl = "http://127.0.0.1:47653";
+            settings.BaseUrl = "http://lumi.test";
             settings.Token = "pc-a-token";
             settings.HostName = "PC A";
             store.Save(settings);
 
+            var handler = new RevokedPairingHandler();
             await using var client = new LumiRemoteClient(
                 settings.DeviceId,
                 settings.DeviceName,
-                new UnauthorizedHandler());
+                handler);
             await using var shell = new MobileShellViewModel(
                 client: client,
                 store: store,
@@ -127,9 +131,56 @@ public sealed class RemoteRouteSecurityTests
             Assert.Equal("", persisted.BaseUrl);
             Assert.Equal("", persisted.Token);
             Assert.Equal("", persisted.HostName);
+            await WaitUntilAsync(() => shell.Connect.IsCodeStep);
+            Assert.Equal(1, handler.HelloRequests);
         }
         finally
         {
+            MobilePlatformServices.HostEnvironment = previousHostEnvironment;
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UnpairedHelloRestartsFixedEndpointOnboarding()
+    {
+        var previousHostEnvironment = MobilePlatformServices.HostEnvironment;
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "Lumi.Mobile.Tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            MobilePlatformServices.HostEnvironment =
+                new FixedHostEnvironment("http://lumi.test");
+            var store = new MobileSettingsStore(directory);
+            var settings = store.Load();
+            settings.BaseUrl = "http://lumi.test";
+            settings.Token = "revoked-token";
+            settings.HostName = "PC A";
+            store.Save(settings);
+
+            var handler = new RevokedPairingHandler();
+            await using var client = new LumiRemoteClient(
+                settings.DeviceId,
+                settings.DeviceName,
+                handler);
+            await using var shell = new MobileShellViewModel(
+                client: client,
+                store: store,
+                post: action => action());
+
+            await shell.StartAsync();
+
+            Assert.False(shell.IsPaired);
+            Assert.Null(client.Token);
+            Assert.Equal(2, handler.HelloRequests);
+            Assert.True(shell.Connect.IsCodeStep);
+        }
+        finally
+        {
+            MobilePlatformServices.HostEnvironment = previousHostEnvironment;
             Directory.Delete(directory, recursive: true);
         }
     }
@@ -162,11 +213,51 @@ public sealed class RemoteRouteSecurityTests
 
     }
 
-    private sealed class UnauthorizedHandler : HttpMessageHandler
+    private static async Task WaitUntilAsync(Func<bool> condition)
     {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (!condition())
+        {
+            if (DateTime.UtcNow >= deadline)
+                throw new TimeoutException("The expected onboarding state was not reached.");
+            await Task.Delay(10);
+        }
+    }
+
+    private sealed class FixedHostEnvironment(string baseUrl) : IMobileHostEnvironment
+    {
+        public bool HasFixedEndpoint => true;
+
+        public string? FixedBaseUrl => baseUrl;
+
+        public string FixedEndpointName => "This Lumi PC";
+    }
+
+    private sealed class RevokedPairingHandler : HttpMessageHandler
+    {
+        public int HelloRequests { get; private set; }
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
+            CancellationToken cancellationToken)
+        {
+            if (request.RequestUri?.AbsolutePath != RemoteProtocol.Routes.Hello)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
+
+            HelloRequests++;
+            var json = JsonSerializer.Serialize(
+                new RemoteHello
+                {
+                    ProtocolVersion = RemoteProtocol.Version,
+                    Capabilities = [RemoteProtocol.Capabilities.ScopedEventsV1],
+                    HostName = "PC A",
+                    IsPaired = false
+                },
+                RemoteJsonContext.Default.RemoteHello);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            });
+        }
     }
 }

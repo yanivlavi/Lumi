@@ -23,6 +23,48 @@ public sealed class RemoteTransportTests
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(10);
 
     [Fact]
+    public async Task DiscoveryResponderAdvertisesItsSelectedLocalAddress()
+    {
+        int discoveryPort;
+        using (var reservation = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0)))
+            discoveryPort = ((IPEndPoint)reservation.Client.LocalEndPoint!).Port;
+
+        using var responder = new RemoteDiscoveryResponder(
+            "selected-interface",
+            IPAddress.Loopback,
+            () => 47653,
+            () => "Adir",
+            discoveryPort);
+        responder.Start();
+        var responderSocket = Assert.IsType<UdpClient>(
+            typeof(RemoteDiscoveryResponder)
+                .GetField("_udp", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(responder));
+        Assert.Equal(
+            IPAddress.Any,
+            Assert.IsType<IPEndPoint>(responderSocket.Client.LocalEndPoint).Address);
+
+        using var client = new UdpClient(AddressFamily.InterNetwork);
+        var probe = Encoding.UTF8.GetBytes(RemoteProtocol.DiscoveryProbe);
+        await client.SendAsync(
+            probe,
+            probe.Length,
+            new IPEndPoint(IPAddress.Loopback, discoveryPort));
+
+        using var timeout = new CancellationTokenSource(TestTimeout);
+        var response = await client.ReceiveAsync(timeout.Token);
+        var text = Encoding.UTF8.GetString(response.Buffer);
+        Assert.StartsWith(RemoteProtocol.DiscoveryBeacon, text);
+
+        var beacon = JsonSerializer.Deserialize(
+            text[RemoteProtocol.DiscoveryBeacon.Length..],
+            RemoteJsonContext.Default.RemoteBeacon);
+        Assert.NotNull(beacon);
+        Assert.Equal(IPAddress.Loopback.ToString(), beacon.Address);
+        Assert.Equal(47653, beacon.Port);
+    }
+
+    [Fact]
     public void ProtocolContractDoesNotAdvertiseRemovedCommandsOrTranscriptRows()
     {
         var actions = ConstantValues(typeof(RemoteProtocol.Actions));
@@ -246,6 +288,12 @@ public sealed class RemoteTransportTests
             new IPEndPoint(IPAddress.Parse("192.168.1.10"), 47653),
             allowInsecureLan: false,
             verifiedTailscaleAddresses));
+        Assert.False(LumiRemoteServer.IsAllowedCaller(
+            new IPEndPoint(IPAddress.Parse("100.85.249.111"), 47653),
+            new IPEndPoint(tailscaleLocal, 47653),
+            allowInsecureLan: true,
+            verifiedTailscaleAddresses,
+            IPAddress.Parse("192.168.1.10")));
         Assert.True(LumiRemoteServer.IsAllowedCaller(
             new IPEndPoint(IPAddress.Loopback, 47653),
             new IPEndPoint(IPAddress.Loopback, 47653),
@@ -257,7 +305,57 @@ public sealed class RemoteTransportTests
         Assert.True(LumiRemoteServer.IsAllowedCaller(
             new IPEndPoint(IPAddress.Parse("192.168.1.20"), 47653),
             new IPEndPoint(IPAddress.Parse("192.168.1.10"), 47653),
-            allowInsecureLan: true));
+            allowInsecureLan: true,
+            selectedLocalNetworkAddress: IPAddress.Parse("192.168.1.10")));
+        Assert.False(LumiRemoteServer.IsAllowedCaller(
+            new IPEndPoint(IPAddress.Parse("192.168.1.20"), 47653),
+            new IPEndPoint(IPAddress.Parse("10.0.0.10"), 47653),
+            allowInsecureLan: true,
+            selectedLocalNetworkAddress: IPAddress.Parse("192.168.1.10")));
+    }
+
+    [Theory]
+    [InlineData("localhost:62145", "127.0.0.1", true)]
+    [InlineData("127.0.0.1:62145", "127.0.0.1", true)]
+    [InlineData("100.85.249.111:62145", "100.85.249.111", true)]
+    [InlineData("[fd7a:115c:a1e0::1]:62145", "fd7a:115c:a1e0::1", true)]
+    [InlineData("lighto-desktop.example.ts.net", "127.0.0.1", true)]
+    [InlineData("192.168.1.20:62145", "100.85.249.111", false)]
+    [InlineData("attacker.example", "127.0.0.1", false)]
+    public void HostPolicyAllowsOnlyLocalAndTailscaleOrigins(
+        string host,
+        string localAddress,
+        bool expected)
+    {
+        var request = new RemoteHttpRequest(
+            "GET",
+            "/app/",
+            "",
+            new Dictionary<string, string> { ["Host"] = host },
+            "",
+            KeepAlive: false);
+
+        Assert.Equal(
+            expected,
+            LumiRemoteServer.IsAllowedHost(
+                request,
+                new IPEndPoint(IPAddress.Parse(localAddress), 62145)));
+    }
+
+    [Fact]
+    public void HostPolicyAllowsThisMachineName()
+    {
+        var request = new RemoteHttpRequest(
+            "GET",
+            "/app/",
+            "",
+            new Dictionary<string, string> { ["Host"] = $"{Environment.MachineName}:62145" },
+            "",
+            KeepAlive: false);
+
+        Assert.True(LumiRemoteServer.IsAllowedHost(
+            request,
+            new IPEndPoint(IPAddress.Loopback, 62145)));
     }
 
     [Fact]

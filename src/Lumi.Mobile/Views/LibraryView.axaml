@@ -3,6 +3,7 @@
              xmlns:vm="using:Lumi.Mobile.ViewModels"
              xmlns:views="using:Lumi.Mobile.Views"
              xmlns:sc="using:StrataTheme.Controls"
+             xmlns:textInput="using:Avalonia.Input.TextInput"
              x:Class="Lumi.Mobile.Views.LibraryView"
              x:DataType="vm:LibraryViewModel"
              Background="{DynamicResource Brush.Surface0}">
@@ -135,6 +136,8 @@
                MaxWidth="720"
                HorizontalAlignment="Stretch"
                Margin="{DynamicResource Mobile.Page.ControlMargin}"
+               textInput:TextInputOptions.ContentType="Search"
+               textInput:TextInputOptions.ReturnKeyType="Search"
                PlaceholderText="Search" Text="{Binding SearchText}" />
     </Border>
 

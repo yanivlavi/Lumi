@@ -175,10 +175,79 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  validate-browser:
+    name: Validate Avalonia PWA
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup .NET 11
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '11.0.x'
+          dotnet-quality: preview
+
+      - name: Install .NET 10 WebAssembly workload
+        run: dotnet workload install wasm-tools-net10
+
+      - name: Publish browser PWA
+        run: >
+          dotnet publish src/Lumi.Mobile.Browser/Lumi.Mobile.Browser.csproj
+          --configuration Release
+          --output BrowserPublish
+
+      - name: Verify browser PWA output
+        shell: pwsh
+        run: |
+          $root = "BrowserPublish/wwwroot"
+          $required = @(
+            "$root/index.html",
+            "$root/android.html",
+            "$root/android-install.css",
+            "$root/android-install.js",
+            "$root/manifest.webmanifest",
+            "$root/_framework/dotnet.js"
+          )
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) {
+            throw "Browser publish is missing: $($missing -join ', ')"
+          }
+          $redundant = @(Get-ChildItem $root -Recurse -File | Where-Object {
+            $_.Name -like "*.gz" -or $_.Name -match "\.map(?:\.(?:br|gz))?$"
+          })
+          if ($redundant.Count -gt 0) {
+            throw "Browser publish contains redundant release assets: $($redundant.FullName -join ', ')"
+          }
+          if (-not (Get-ChildItem $root -Recurse -File -Filter "*.br" | Select-Object -First 1)) {
+            throw "Browser publish is missing Brotli assets."
+          }
+          $installerScript = Get-Content "$root/android-install.js" -Raw
+          if ($installerScript -notmatch 'package=com\.lumi\.mobile' -or
+              $installerScript -match "parameters\.get\(['`"]apk") {
+            throw "Android installer must use the package-scoped official release flow."
+          }
+
+      - name: Upload browser validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-pwa-${{ github.sha }}
+          path: BrowserPublish/wwwroot
+          if-no-files-found: error
+          retention-days: 7
+
   validate-required:
     name: Validate
     if: ${{ always() }}
-    needs: [validate, validate-strata, validate-android]
+    needs: [validate, validate-strata, validate-android, validate-browser]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required validation jobs
@@ -186,10 +255,12 @@ jobs:
           PLATFORM_RESULT: ${{ needs.validate.result }}
           STRATA_RESULT: ${{ needs.validate-strata.result }}
           ANDROID_RESULT: ${{ needs.validate-android.result }}
+          BROWSER_RESULT: ${{ needs.validate-browser.result }}
         run: |
           if [[ "$PLATFORM_RESULT" != "success" ||
                 "$STRATA_RESULT" != "success" ||
-                "$ANDROID_RESULT" != "success" ]]; then
-            echo "Validation failed: platform=$PLATFORM_RESULT strata=$STRATA_RESULT android=$ANDROID_RESULT"
+                "$ANDROID_RESULT" != "success" ||
+                "$BROWSER_RESULT" != "success" ]]; then
+            echo "Validation failed: platform=$PLATFORM_RESULT strata=$STRATA_RESULT android=$ANDROID_RESULT browser=$BROWSER_RESULT"
             exit 1
           fi

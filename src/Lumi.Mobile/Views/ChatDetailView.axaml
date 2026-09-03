@@ -501,6 +501,7 @@
                                Classes="mobile"
                                MaxWidth="{DynamicResource Chat.ReadingColumnWidth}"
                                PromptText="{Binding Chat.PromptText, Mode=TwoWay}"
+                               PreferAutoCompleteAbove="True"
                                IsBusy="{Binding Chat.IsBusy}"
                                SendWithEnter="False"
                                SteerWhileBusy="True"

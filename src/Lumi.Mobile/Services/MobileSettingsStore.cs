@@ -4,6 +4,13 @@ using System.Text.Json.Serialization;
 
 namespace Lumi.Mobile.Services;
 
+public interface IMobileSettingsStore
+{
+    MobileConnectionSettings Load();
+
+    void Save(MobileConnectionSettings settings);
+}
+
 /// <summary>What the phone remembers between launches.</summary>
 public sealed class MobileConnectionSettings
 {
@@ -31,7 +38,7 @@ internal sealed partial class MobileSettingsJsonContext : JsonSerializerContext;
 /// Tiny JSON store under the platform app-data folder. Deliberately mirrors Lumi desktop's
 /// "one small JSON file, no database" convention.
 /// </summary>
-public sealed class MobileSettingsStore
+public sealed class MobileSettingsStore : IMobileSettingsStore
 {
     private readonly string _path;
 
@@ -96,6 +103,9 @@ public sealed class MobileSettingsStore
 
     private static string DefaultDeviceName()
     {
+        if (MobilePlatformServices.DeviceNameOverride is { Length: > 0 } platformName)
+            return platformName;
+
         try
         {
             var machine = Environment.MachineName;

@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Lumi.Mobile.ViewModels"
+             xmlns:textInput="using:Avalonia.Input.TextInput"
              xmlns:sc="using:StrataTheme.Controls"
              x:Class="Lumi.Mobile.Views.MobileSearchView"
              x:DataType="vm:MobileShellViewModel"
@@ -30,6 +31,8 @@
 
           <TextBox x:Name="SearchField" Grid.Column="1" Classes="search-field no-focus-accent"
                    PlaceholderText="Search chats"
+                   textInput:TextInputOptions.ContentType="Search"
+                   textInput:TextInputOptions.ReturnKeyType="Search"
                    Text="{Binding SearchChatList.SearchText}" />
         </Grid>
       </Border>

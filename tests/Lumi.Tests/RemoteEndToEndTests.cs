@@ -282,7 +282,7 @@ public sealed class RemoteEndToEndTests
     });
 
     [Fact]
-    public Task TailscaleAddressesCanRecoverAfterStartupWithoutRestartingLumi()
+    public Task TailscaleAvailabilityRefreshesWithoutRestartingLumi()
     {
         var address = IPAddress.Parse("100.85.249.111");
         var available = 0;
@@ -300,11 +300,24 @@ public sealed class RemoteEndToEndTests
             {
                 await WaitAsync(() => Volatile.Read(ref probes) > 0, "the initial Tailscale probe");
                 Assert.Empty(rig.Server.VerifiedTailscaleAddresses);
+                Assert.False(rig.Main.SettingsVM.IsMobileTailscaleAvailable);
 
                 Volatile.Write(ref available, 1);
-                await rig.Server.RefreshTailscaleAddressesNowAsync();
+                await rig.Server.RefreshNetworkAddressesNowAsync();
 
                 Assert.Contains(address, rig.Server.VerifiedTailscaleAddresses);
+                await WaitAsync(
+                    () => rig.Main.SettingsVM.IsMobileTailscaleAvailable,
+                    "the Tailscale availability UI update");
+                Assert.True(rig.Main.SettingsVM.IsMobileTailscaleSelected);
+
+                rig.Main.SettingsVM.SelectMobileLocalNetworkCommand.Execute(null);
+                Assert.True(rig.Main.SettingsVM.UseLocalNetworkForMobile);
+                Assert.True(rig.Main.SettingsVM.IsMobileLocalNetworkSelected);
+
+                rig.Main.SettingsVM.SelectMobileTailscaleCommand.Execute(null);
+                Assert.False(rig.Main.SettingsVM.UseLocalNetworkForMobile);
+                Assert.True(rig.Main.SettingsVM.IsMobileTailscaleSelected);
             },
             tailscaleAddressProvider: Provider);
     }
@@ -2057,7 +2070,7 @@ public sealed class RemoteEndToEndTests
     });
 
     [Fact]
-    public Task MultipleSettingsViewModelsReflectTheSharedRemoteServer() => RunAsync(rig =>
+    public Task MultipleSettingsViewModelsReflectTheSharedRemoteServer() => RunAsync(async rig =>
     {
         using var secondary = new MainViewModel(
             rig.DataStore,
@@ -2067,11 +2080,13 @@ public sealed class RemoteEndToEndTests
         secondary.SettingsVM.AttachRemoteServer(rig.Server);
 
         Assert.True(secondary.SettingsVM.RemoteAccessEnabled);
-        Assert.Contains("Listening", secondary.SettingsVM.RemoteStatusText);
+        Assert.Contains("Choose Tailscale or Local network", secondary.SettingsVM.RemoteStatusText);
 
-        rig.Main.SettingsVM.RemoteAllowInsecureLan = true;
-        Assert.True(secondary.SettingsVM.RemoteAllowInsecureLan);
-        return Task.CompletedTask;
+        rig.Main.SettingsVM.UseLocalNetworkForMobile = true;
+        await WaitAsync(
+            () => secondary.SettingsVM.UseLocalNetworkForMobile
+                  && secondary.SettingsVM.RemoteStatusText.Contains("Listening", StringComparison.Ordinal),
+            "the shared local-network transport selection");
     });
 
     [Fact]

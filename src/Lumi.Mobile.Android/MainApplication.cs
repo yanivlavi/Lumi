@@ -1,4 +1,5 @@
 using Android.App;
+using Android.OS;
 using Android.Runtime;
 using Avalonia;
 using Avalonia.Android;
@@ -27,9 +28,19 @@ public class MainApplication : AvaloniaAndroidApplication<App>
         // Before anything else: a crash during Avalonia startup is exactly the one we cannot see.
         RemotePlatformServices.RouteVerifier = new AndroidRemoteRouteVerifier(this);
         MobilePlatformServices.ProducedFileOpener = new AndroidProducedFileOpener(this);
+        MobilePlatformServices.DeviceNameOverride = ResolveDeviceName();
         CrashReporter.Install();
     }
 
     protected override AppBuilder CustomizeAppBuilder(AppBuilder builder) =>
         base.CustomizeAppBuilder(builder).WithInterFont();
+
+    private static string ResolveDeviceName()
+    {
+        var model = Build.Model?.Trim();
+        return string.IsNullOrWhiteSpace(model)
+            || model.StartsWith("sdk_", StringComparison.OrdinalIgnoreCase)
+            ? "Android phone"
+            : model;
+    }
 }

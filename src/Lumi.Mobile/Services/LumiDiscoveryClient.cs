@@ -8,11 +8,18 @@ using Lumi.Remote.Protocol;
 
 namespace Lumi.Mobile.Services;
 
+public interface ILumiDiscoveryClient
+{
+    Task<IReadOnlyList<RemoteBeacon>> DiscoverAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>
 /// Finds Lumi desktops on the local network by broadcasting a UDP probe and collecting beacons.
 /// Deliberately fire-and-forget: discovery is a convenience, manual host entry always works.
 /// </summary>
-public sealed class LumiDiscoveryClient
+public sealed class LumiDiscoveryClient : ILumiDiscoveryClient
 {
     private readonly int _discoveryPort;
 

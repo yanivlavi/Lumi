@@ -1611,6 +1611,24 @@ public sealed partial class MobileChatViewModel : ObservableObject
             ClearPendingEchoes();
         }
 
+        var imageChatId = transcript.ChatId;
+        Func<
+            string,
+            string,
+            IReadOnlyList<RemoteInlineImage>,
+            CancellationToken,
+            Task<string>> resolveInlineImages =
+            (messageId, markdown, images, cancellationToken) =>
+                ResolveInlineImagesAsync(
+                    imageChatId,
+                    messageId,
+                    markdown,
+                    images,
+                    cancellationToken);
+        Action<string, IReadOnlyList<RemoteInlineImage>> releaseInlineImages =
+            (messageId, images) =>
+                ReleaseInlineImages(imageChatId, messageId, images);
+
         for (var i = 0; i < transcript.Turns.Count; i++)
         {
             var incoming = transcript.Turns[i];
@@ -1625,7 +1643,8 @@ public sealed partial class MobileChatViewModel : ObservableObject
                 incoming.Id,
                 OpenActivityAsync,
                 OpenSources,
-                ResolveInlineImagesAsync);
+                resolveInlineImages,
+                releaseInlineImages);
             created.Apply(incoming);
 
             if (i < Turns.Count)
@@ -2693,8 +2712,7 @@ public sealed partial class MobileChatViewModel : ObservableObject
         var turn = new TranscriptTurnViewModel(
             EchoTurnId,
             OpenActivityAsync,
-            OpenSources,
-            ResolveInlineImagesAsync);
+            OpenSources);
         turn.Items.Add(new UserTurnItemViewModel(new RemoteTranscriptItem
         {
             Id = EchoTurnId,
@@ -2710,19 +2728,19 @@ public sealed partial class MobileChatViewModel : ObservableObject
     }
 
     private async Task<string> ResolveInlineImagesAsync(
+        Guid chatId,
         string messageId,
         string markdown,
         IReadOnlyList<RemoteInlineImage> images,
         CancellationToken cancellationToken)
     {
         if (_sink is not IRemoteMarkdownImageSink imageSink
-            || ChatId == Guid.Empty
+            || chatId == Guid.Empty
             || !Guid.TryParseExact(messageId, "N", out var parsedMessageId))
         {
             return markdown;
         }
 
-        var chatId = ChatId;
         var downloads = images.Select(async image =>
         {
             var path = await imageSink.DownloadMarkdownImageAsync(
@@ -2741,6 +2759,22 @@ public sealed partial class MobileChatViewModel : ObservableObject
                 result => result.Path!);
 
         return RemoteMarkdownImages.RewriteTargets(markdown, replacements);
+    }
+
+    private void ReleaseInlineImages(
+        Guid chatId,
+        string messageId,
+        IReadOnlyList<RemoteInlineImage> images)
+    {
+        if (_sink is IRemoteMarkdownImageSink imageSink
+            && chatId != Guid.Empty
+            && Guid.TryParseExact(messageId, "N", out var parsedMessageId))
+        {
+            imageSink.ReleaseMarkdownImages(
+                chatId,
+                parsedMessageId,
+                images);
+        }
     }
 
     private void RemovePendingEcho(TranscriptTurnViewModel? turn)
@@ -3326,6 +3360,11 @@ public interface IRemoteMarkdownImageSink
         int imageIndex,
         string fileName,
         CancellationToken cancellationToken);
+
+    void ReleaseMarkdownImages(
+        Guid chatId,
+        Guid messageId,
+        IReadOnlyList<RemoteInlineImage> images);
 }
 
 public interface IRemoteFileSuggestionSink

@@ -85,7 +85,9 @@ public sealed partial class AssistantItemViewModel : TranscriptItemViewModel
         IReadOnlyList<RemoteInlineImage>,
         CancellationToken,
         Task<string>>? _resolveInlineImages;
+    private readonly Action<string, IReadOnlyList<RemoteInlineImage>>? _releaseInlineImages;
     private CancellationTokenSource? _imageResolutionCts;
+    private IReadOnlyList<RemoteInlineImage>? _leasedInlineImages;
     private long _imageResolutionVersion;
 
     [ObservableProperty] private string _text = "";
@@ -121,17 +123,20 @@ public sealed partial class AssistantItemViewModel : TranscriptItemViewModel
             string,
             IReadOnlyList<RemoteInlineImage>,
             CancellationToken,
-            Task<string>>? resolveInlineImages = null)
+            Task<string>>? resolveInlineImages = null,
+        Action<string, IReadOnlyList<RemoteInlineImage>>? releaseInlineImages = null)
         : base(item)
     {
         _openSources = openSources;
         _resolveInlineImages = resolveInlineImages;
+        _releaseInlineImages = releaseInlineImages;
         Update(item);
     }
 
     public override void Update(RemoteTranscriptItem item)
     {
         CancelImageResolution();
+        ReleaseInlineImages();
         var sourceText = item.Text ?? "";
         SourceText = sourceText;
         Text = sourceText;
@@ -149,12 +154,13 @@ public sealed partial class AssistantItemViewModel : TranscriptItemViewModel
             && item.InlineImages is { Count: > 0 }
             && _resolveInlineImages is not null)
         {
+            var images = item.InlineImages.ToArray();
             var version = Interlocked.Increment(ref _imageResolutionVersion);
             var current = new CancellationTokenSource();
             _imageResolutionCts = current;
             _ = ResolveInlineImagesAsync(
                 sourceText,
-                item.InlineImages,
+                images,
                 version,
                 current);
         }
@@ -163,12 +169,17 @@ public sealed partial class AssistantItemViewModel : TranscriptItemViewModel
     internal void ApplyStreamText(string sourceText)
     {
         CancelImageResolution();
+        ReleaseInlineImages();
         SourceText = sourceText;
         Text = sourceText;
         IsStreaming = true;
     }
 
-    public override void Dispose() => CancelImageResolution();
+    public override void Dispose()
+    {
+        CancelImageResolution();
+        ReleaseInlineImages();
+    }
 
     partial void OnTextChanged(string value) =>
         OnPropertyChanged(nameof(SelectionText));
@@ -187,6 +198,7 @@ public sealed partial class AssistantItemViewModel : TranscriptItemViewModel
         CancellationTokenSource cancellation)
     {
         var cancellationToken = cancellation.Token;
+        var leaseTransferred = false;
         try
         {
             var resolved = await _resolveInlineImages!(
@@ -203,13 +215,15 @@ public sealed partial class AssistantItemViewModel : TranscriptItemViewModel
                     && string.Equals(SourceText, sourceText, StringComparison.Ordinal))
                 {
                     Text = resolved;
+                    _leasedInlineImages = images;
+                    leaseTransferred = true;
                 }
             }
 
             if (Dispatcher.UIThread.CheckAccess())
                 ApplyResolvedText();
             else
-                Dispatcher.UIThread.Post(ApplyResolvedText);
+                await Dispatcher.UIThread.InvokeAsync(ApplyResolvedText);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -220,12 +234,23 @@ public sealed partial class AssistantItemViewModel : TranscriptItemViewModel
         }
         finally
         {
+            if (!leaseTransferred)
+                _releaseInlineImages?.Invoke(Id, images);
             Interlocked.CompareExchange(
                 ref _imageResolutionCts,
                 null,
                 cancellation);
             cancellation.Dispose();
         }
+    }
+
+    private void ReleaseInlineImages()
+    {
+        if (_leasedInlineImages is not { } images)
+            return;
+
+        _leasedInlineImages = null;
+        _releaseInlineImages?.Invoke(Id, images);
     }
 
     [RelayCommand]
@@ -727,7 +752,8 @@ public static class TranscriptItemFactory
             string,
             IReadOnlyList<RemoteInlineImage>,
             CancellationToken,
-            Task<string>>? resolveInlineImages = null) => item.Kind switch
+            Task<string>>? resolveInlineImages = null,
+        Action<string, IReadOnlyList<RemoteInlineImage>>? releaseInlineImages = null) => item.Kind switch
     {
         RemoteProtocol.ItemKinds.User => new UserTurnItemViewModel(item),
         RemoteProtocol.ItemKinds.Activity => new ActivitySummaryItemViewModel(item, openActivity),
@@ -739,7 +765,11 @@ public static class TranscriptItemFactory
         RemoteProtocol.ItemKinds.File => new FileItemViewModel(item),
 
         // Unknown kinds degrade to plain assistant text rather than breaking the transcript.
-        _ => new AssistantItemViewModel(item, openSources, resolveInlineImages)
+        _ => new AssistantItemViewModel(
+            item,
+            openSources,
+            resolveInlineImages,
+            releaseInlineImages)
     };
 
     /// <summary>True when an existing row can be updated in place instead of being replaced.</summary>
@@ -758,6 +788,7 @@ public sealed partial class TranscriptTurnViewModel : ObservableObject, IDisposa
         IReadOnlyList<RemoteInlineImage>,
         CancellationToken,
         Task<string>>? _resolveInlineImages;
+    private readonly Action<string, IReadOnlyList<RemoteInlineImage>>? _releaseInlineImages;
 
     public TranscriptTurnViewModel(
         string id,
@@ -768,12 +799,14 @@ public sealed partial class TranscriptTurnViewModel : ObservableObject, IDisposa
             string,
             IReadOnlyList<RemoteInlineImage>,
             CancellationToken,
-            Task<string>>? resolveInlineImages = null)
+            Task<string>>? resolveInlineImages = null,
+        Action<string, IReadOnlyList<RemoteInlineImage>>? releaseInlineImages = null)
     {
         Id = id;
         _openActivity = openActivity;
         _openSources = openSources;
         _resolveInlineImages = resolveInlineImages;
+        _releaseInlineImages = releaseInlineImages;
     }
 
     public string Id { get; }
@@ -796,7 +829,8 @@ public sealed partial class TranscriptTurnViewModel : ObservableObject, IDisposa
                 incoming,
                 _openActivity,
                 _openSources,
-                _resolveInlineImages);
+                _resolveInlineImages,
+                _releaseInlineImages);
             if (i < Items.Count)
             {
                 var replaced = Items[i];

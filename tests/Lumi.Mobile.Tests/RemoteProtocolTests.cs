@@ -142,6 +142,7 @@ public class RemoteProtocolTests
     [InlineData("192.168.1.5", "http://192.168.1.5:47653")]
     [InlineData("192.168.1.5:9000", "http://192.168.1.5:9000")]
     [InlineData("http://lumi-pc", "http://lumi-pc:47653")]
+    [InlineData("https://lumi-pc.example.ts.net", "https://lumi-pc.example.ts.net")]
     [InlineData("http://192.168.1.5:8080/", "http://192.168.1.5:8080")]
     [InlineData("", "")]
     public void BaseUrlNormalization_AcceptsWhatAPersonWouldActuallyType(string input, string expected)

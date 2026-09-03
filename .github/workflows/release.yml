@@ -1,5 +1,6 @@
-# Release pipeline — builds, signs and publishes desktop Velopack installers plus
-# a production-signed Android APK from a single workflow_dispatch run.
+# Release pipeline — builds one platform-neutral Avalonia PWA, bundles it into every
+# desktop package, signs and publishes the Velopack installers, and produces a
+# production-signed Android APK from a single workflow_dispatch run.
 #
 # Auto-update: Velopack's GithubSource uses the default win/linux channels on those
 # platforms, while Lumi's UpdateService explicitly selects osx-arm64 or osx-x64 on macOS.
@@ -13,11 +14,10 @@
 #   osx-x64     macOS Intel                    Lumi.pkg + Lumi.app (Portable zip)
 #   android     Android arm64                  Lumi-<version>-android-arm64.apk
 #
-# Orchestration: Android is built, signed and verified before Windows publishes anything, so a
-# broken/mis-signed APK can never leave a partial desktop-only production release. Windows then
-# creates the GitHub release via Velopack. Linux and macOS run after Windows and merge their
-# assets onto that release; publish-android attaches the already-verified workflow artifact.
-# Sequencing also avoids concurrent create-release races: only Windows creates the release.
+# Orchestration: the platform-neutral PWA and Android APK build in parallel. Windows waits for
+# both, then creates a draft GitHub release via Velopack. Linux and macOS merge their assets onto
+# that draft, publish-android attaches the verified APK, and publish-release makes the complete
+# release public. Sequencing avoids both partial releases and concurrent create-release races.
 #
 # vpk CLI is pinned to 0.0.1298 to exactly match the Velopack library referenced by the app
 # (src/Lumi/Lumi.csproj). Velopack recommends matching CLI and library versions so the
@@ -98,9 +98,94 @@ jobs:
           echo "version=$REQUESTED_VERSION" >> "$GITHUB_OUTPUT"
           echo "android_version_code=$android_code" >> "$GITHUB_OUTPUT"
 
-  # Windows is the authoritative job: it creates and publishes the GitHub release.
+  # The Avalonia PWA is platform-neutral. Build it once so every desktop package contains
+  # byte-for-byte identical web assets matched to this release commit.
+  build-pwa:
+    needs: validate_release_inputs
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      RELEASE_VERSION: ${{ needs.validate_release_inputs.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup .NET 11
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '11.0.x'
+          dotnet-quality: preview
+
+      - name: Install .NET 10 WebAssembly workload
+        run: dotnet workload install wasm-tools-net10
+
+      - name: Publish Avalonia PWA
+        run: >
+          dotnet publish src/Lumi.Mobile.Browser/Lumi.Mobile.Browser.csproj
+          --configuration Release
+          --output BrowserPublish
+          /p:Version=$env:RELEASE_VERSION
+
+      - name: Verify release PWA
+        shell: pwsh
+        run: |
+          $root = "BrowserPublish\wwwroot"
+          $required = @(
+            "$root\index.html",
+            "$root\android.html",
+            "$root\android-install.css",
+            "$root\android-install.js",
+            "$root\manifest.webmanifest",
+            "$root\_framework\dotnet.js"
+          )
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) {
+            throw "Browser publish is missing: $($missing -join ', ')"
+          }
+
+          $redundant = @(Get-ChildItem $root -Recurse -File | Where-Object {
+            $_.Name -like "*.gz" -or $_.Name -match "\.map(?:\.(?:br|gz))?$"
+          })
+          if ($redundant.Count -gt 0) {
+            throw "Browser publish contains redundant release assets: $($redundant.FullName -join ', ')"
+          }
+          if (-not (Get-ChildItem $root -Recurse -File -Filter "*.br" | Select-Object -First 1)) {
+            throw "Browser publish is missing Brotli assets."
+          }
+          $installerScript = Get-Content "$root\android-install.js" -Raw
+          if ($installerScript -notmatch 'package=com\.lumi\.mobile' -or
+              $installerScript -match "parameters\.get\(['`"]apk") {
+            throw "Android installer must use the package-scoped official release flow."
+          }
+
+          $assembly = Get-Item "src\Lumi.Mobile.Browser\bin\Release\net10.0-browser\Lumi.Mobile.Browser.dll"
+          $publishedVersion = ($assembly.VersionInfo.ProductVersion -split "\+", 2)[0]
+          if ($publishedVersion -ne $env:RELEASE_VERSION) {
+            throw "Browser publish version is $publishedVersion; expected $env:RELEASE_VERSION."
+          }
+
+          $files = @(Get-ChildItem $root -Recurse -File)
+          $bytes = ($files | Measure-Object Length -Sum).Sum
+          Write-Host ("Release PWA: {0} files, {1:N2} MiB" -f $files.Count, ($bytes / 1MB))
+
+      - name: Upload release PWA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-pwa-${{ needs.validate_release_inputs.outputs.version }}-${{ github.sha }}
+          path: BrowserPublish\wwwroot
+          if-no-files-found: error
+          retention-days: 7
+
+  # Windows is the authoritative job: it creates the draft GitHub release.
   release-windows:
-    needs: [validate_release_inputs, build-android]
+    needs: [validate_release_inputs, build-android, build-pwa]
     runs-on: windows-latest
     env:
       RELEASE_VERSION: ${{ needs.validate_release_inputs.outputs.version }}
@@ -131,6 +216,25 @@ jobs:
           -r win-x64
           -o publish
           /p:Version=$env:RELEASE_VERSION
+
+      - name: Add PWA to Windows publish
+        uses: actions/download-artifact@v4
+        with:
+          name: release-pwa-${{ needs.validate_release_inputs.outputs.version }}-${{ github.sha }}
+          path: publish\remote-web
+
+      - name: Verify bundled PWA
+        shell: pwsh
+        run: |
+          $required = @(
+            "publish\remote-web\index.html",
+            "publish\remote-web\android.html",
+            "publish\remote-web\_framework\dotnet.js"
+          )
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) {
+            throw "Windows publish is missing PWA assets: $($missing -join ', ')"
+          }
 
       - name: Azure login
         if: ${{ inputs.dry_run == false }}
@@ -187,13 +291,12 @@ jobs:
             -act azure-cli `
             -v Information
 
-      - name: Upload to GitHub Releases (creates + publishes the release)
+      - name: Upload to GitHub Releases (creates draft release)
         if: ${{ inputs.dry_run == false }}
         run: >
           vpk upload github
           --repoUrl https://github.com/${{ github.repository }}
           --token ${{ secrets.GITHUB_TOKEN }}
-          --publish
           --releaseName "Lumi v$env:RELEASE_VERSION"
           --tag "v$env:RELEASE_VERSION"
           --channel win
@@ -207,7 +310,7 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  # Android: production-signed arm64 APK, attached to the GitHub release created by Windows.
+  # Android: production-signed arm64 APK, attached to the draft GitHub release created by Windows.
   # Dry runs use a disposable keystore so the full packaging path stays testable without secrets.
   build-android:
     needs: validate_release_inputs
@@ -388,7 +491,7 @@ jobs:
   # A portable tarball is also published for systems without FUSE 2 (including stock
   # Ubuntu 24.04), while the AppImage remains the auto-updating package.
   release-linux:
-    needs: [validate_release_inputs, release-windows]
+    needs: [validate_release_inputs, build-pwa, release-windows]
     runs-on: ubuntu-latest
     env:
       RELEASE_VERSION: ${{ needs.validate_release_inputs.outputs.version }}
@@ -421,6 +524,19 @@ jobs:
           -r linux-x64
           -o publish-linux
           /p:Version=$RELEASE_VERSION
+
+      - name: Add PWA to Linux publish
+        uses: actions/download-artifact@v4
+        with:
+          name: release-pwa-${{ needs.validate_release_inputs.outputs.version }}-${{ github.sha }}
+          path: publish-linux/remote-web
+
+      - name: Verify bundled PWA
+        run: |
+          set -euo pipefail
+          test -f publish-linux/remote-web/index.html
+          test -f publish-linux/remote-web/android.html
+          test -f publish-linux/remote-web/_framework/dotnet.js
 
       - name: Download previous release (for delta generation)
         run: >
@@ -480,7 +596,7 @@ jobs:
   # channel. macOS packaging MUST run on macOS (codesign/xcrun/productbuild are required),
   # so each arch builds on its native runner.
   release-macos:
-    needs: [validate_release_inputs, release-windows]
+    needs: [validate_release_inputs, build-pwa, release-windows]
     strategy:
       fail-fast: false
       matrix:
@@ -589,6 +705,19 @@ jobs:
           -o publish-${{ matrix.rid }}
           /p:Version=$RELEASE_VERSION
 
+      - name: Add PWA to macOS publish
+        uses: actions/download-artifact@v4
+        with:
+          name: release-pwa-${{ needs.validate_release_inputs.outputs.version }}-${{ github.sha }}
+          path: publish-${{ matrix.rid }}/remote-web
+
+      - name: Verify bundled PWA
+        run: |
+          set -euo pipefail
+          test -f "publish-${{ matrix.rid }}/remote-web/index.html"
+          test -f "publish-${{ matrix.rid }}/remote-web/android.html"
+          test -f "publish-${{ matrix.rid }}/remote-web/_framework/dotnet.js"
+
       - name: Download previous release (for delta generation)
         run: >
           vpk download github
@@ -643,3 +772,15 @@ jobs:
       - name: Clean up signing keychain
         if: always() && steps.applesign.outputs.signing == 'signed'
         run: security delete-keychain "$RUNNER_TEMP/lumi-signing.keychain-db" || true
+
+  publish-release:
+    if: ${{ inputs.dry_run == false }}
+    needs: [validate_release_inputs, publish-android, release-linux, release-macos]
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ needs.validate_release_inputs.outputs.version }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Publish complete GitHub release
+        run: gh release edit "v$RELEASE_VERSION" --draft=false

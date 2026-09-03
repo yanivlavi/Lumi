@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
+using Lumi.Mobile.Behaviors;
 using Lumi.Mobile.ViewModels;
 using System.ComponentModel;
 
@@ -73,6 +74,9 @@ public partial class ConnectView : UserControl
                 if (_viewModel?.IsCodeStep == true
                     && this.FindControl<TextBox>("PairingCodeBox") is { } textBox)
                 {
+                    if (NativeTextInputOverlay.TryFocus(textBox))
+                        return;
+
                     textBox.Focus();
                     textBox.CaretIndex = textBox.Text?.Length ?? 0;
                 }

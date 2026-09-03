@@ -13,6 +13,7 @@ using Avalonia.Media;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Input.TextInput;
+using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Lumi.Mobile.Behaviors;
@@ -97,6 +98,85 @@ public sealed class MobileShellViewTests
 
     private static Control Named(Window window, string name) =>
         window.GetVisualDescendants().OfType<Control>().Single(c => c.Name == name);
+
+    private sealed class RecordingNativeTextInputOverlayPresenter : INativeTextInputOverlayPresenter
+    {
+        public List<Session> Sessions { get; } = [];
+
+        public bool IsAvailable => true;
+
+        public INativeTextInputOverlaySession Create(
+            Action<string, int> textChanged,
+            Func<Key, KeyModifiers, bool> keyPressed,
+            Action<bool> focusChanged)
+        {
+            var session = new Session(textChanged, keyPressed, focusChanged);
+            Sessions.Add(session);
+            return session;
+        }
+
+        public sealed class Session(
+            Action<string, int> textChanged,
+            Func<Key, KeyModifiers, bool> keyPressed,
+            Action<bool> focusChanged)
+            : INativeTextInputOverlaySession
+        {
+            public bool IsShown { get; private set; }
+
+            public bool FocusRequested { get; private set; }
+
+            public int FocusRequestCount { get; private set; }
+
+            public Rect Bounds { get; private set; }
+
+            public Rect ClipBounds { get; private set; }
+
+            public string Value { get; private set; } = "";
+
+            public NativeTextInputOverlayOptions Options { get; private set; }
+
+            public int CaretIndex { get; private set; }
+
+            public void Show(
+                Rect bounds,
+                Rect clipBounds,
+                string value,
+                NativeTextInputOverlayOptions options)
+            {
+                IsShown = true;
+                Bounds = bounds;
+                ClipBounds = clipBounds;
+                Value = value;
+                Options = options;
+            }
+
+            public void Hide() => IsShown = false;
+
+            public void FocusAt(int caretIndex)
+            {
+                FocusRequested = true;
+                FocusRequestCount++;
+                CaretIndex = caretIndex;
+                focusChanged(true);
+            }
+
+            public void SimulateText(string value, int? caretIndex = null)
+            {
+                Value = value;
+                CaretIndex = Math.Clamp(caretIndex ?? value.Length, 0, value.Length);
+                textChanged(value, CaretIndex);
+            }
+
+            public bool SimulateKey(Key key, KeyModifiers modifiers = KeyModifiers.None) =>
+                keyPressed(key, modifiers);
+
+            public void Dispose()
+            {
+                IsShown = false;
+                focusChanged(false);
+            }
+        }
+    }
 
     private static void Pair(MobileShellViewModel shell)
     {
@@ -230,6 +310,291 @@ public sealed class MobileShellViewTests
             Assert.True(Named(window, "ConnectHost").IsVisible);
             Assert.False(Named(window, "NavDrawer").IsVisible);
         });
+    }
+
+    [Fact]
+    public async Task BrowserPairingInputTracksTheRenderedFieldAndHidesWhenPairingStarts()
+    {
+        var presenter = new RecordingNativeTextInputOverlayPresenter();
+        MobilePlatformServices.TextInputOverlayPresenter = presenter;
+        try
+        {
+            await Run((shell, window) =>
+            {
+                Layout(window, shell, 412, 892);
+                shell.Connect.TargetHostName = Pc;
+                shell.Connect.Step = ConnectStep.EnterCode;
+                Pump(window);
+
+                var textBox = Assert.IsType<TextBox>(Named(window, "PairingCodeBox"));
+                var origin = textBox.TranslatePoint(default, window);
+                Assert.NotNull(origin);
+                var pairingSession = Assert.Single(
+                    presenter.Sessions,
+                    session => session.IsShown && session.Options.Placeholder == "000000");
+                Assert.Equal(new Rect(origin.Value, textBox.Bounds.Size), pairingSession.Bounds);
+                Assert.Equal(pairingSession.Bounds, pairingSession.ClipBounds);
+                Assert.Empty(pairingSession.Value);
+                Assert.False(textBox.IsFocused);
+                Assert.True(textBox.Focusable);
+                Assert.True(pairingSession.FocusRequested);
+                Assert.Equal("numeric", pairingSession.Options.InputMode);
+                Assert.Equal("done", pairingSession.Options.EnterKeyHint);
+                Assert.True(pairingSession.Options.IsSensitive);
+                Assert.Equal(6, pairingSession.Options.MaxLength);
+                KeyEventArgs? forwarded = null;
+                textBox.AddHandler(
+                    InputElement.KeyDownEvent,
+                    (_, args) =>
+                    {
+                        if (args.Key != Key.Escape)
+                            return;
+                        forwarded = args;
+                        args.Handled = true;
+                    },
+                    RoutingStrategies.Tunnel);
+                Assert.True(pairingSession.SimulateKey(
+                    Key.Escape,
+                    KeyModifiers.Control | KeyModifiers.Shift));
+                Assert.NotNull(forwarded);
+                Assert.Equal(
+                    KeyModifiers.Control | KeyModifiers.Shift,
+                    forwarded.KeyModifiers);
+
+                pairingSession.SimulateText("123456");
+                Pump(window);
+                Assert.Equal("123456", shell.Connect.PairingCode);
+                Assert.Equal("123456", pairingSession.Value);
+
+                shell.Connect.Step = ConnectStep.Connecting;
+                Pump(window);
+                Assert.False(pairingSession.IsShown);
+
+                shell.Connect.Step = ConnectStep.EnterCode;
+                Layout(window, shell, 360, 400);
+                var scroll = textBox.GetVisualAncestors().OfType<ScrollViewer>().First();
+                var beforeScroll = pairingSession.Bounds;
+                scroll.Offset = new Vector(
+                    0,
+                    Math.Max(0, scroll.Extent.Height - scroll.Viewport.Height));
+                Pump(window);
+                var scrollOrigin = scroll.TranslatePoint(default, window);
+                Assert.NotNull(scrollOrigin);
+                if (scroll.Offset.Y > 0 && pairingSession.IsShown)
+                    Assert.NotEqual(beforeScroll.Y, pairingSession.Bounds.Y);
+                if (pairingSession.IsShown)
+                {
+                    var viewport = new Rect(scrollOrigin.Value, scroll.Bounds.Size);
+                    Assert.True(
+                        pairingSession.ClipBounds.Top >= viewport.Top
+                        && pairingSession.ClipBounds.Bottom <= viewport.Bottom,
+                        $"Pairing clip {pairingSession.ClipBounds} escaped onboarding viewport {viewport}.");
+                }
+            });
+        }
+        finally
+        {
+            MobilePlatformServices.ResetTextInputOverlayPresenter(presenter);
+        }
+    }
+
+    [Fact]
+    public async Task BrowserTextInputOverlaysSynchronizeSearchAndLibraryEditors()
+    {
+        var presenter = new RecordingNativeTextInputOverlayPresenter();
+        MobilePlatformServices.TextInputOverlayPresenter = presenter;
+        try
+        {
+            await Run((shell, window) =>
+            {
+                Pair(shell);
+                OpenChat(shell);
+                Layout(window, shell, 412, 892);
+
+                var composerBox = window.GetVisualDescendants()
+                    .OfType<TextBox>()
+                    .Single(textBox => textBox.Name == "PART_Input");
+                var composerSession = Assert.Single(
+                    presenter.Sessions,
+                    session => session.IsShown
+                               && session.Options.Placeholder == "Ask anything");
+                Assert.True(NativeTextInputOverlay.GetForwardEnterKey(composerBox));
+                Assert.Equal("enter", composerSession.Options.EnterKeyHint);
+                Assert.True(composerSession.Options.IsMultiline);
+                var emptyComposerBounds = composerSession.Bounds;
+                composerSession.SimulateText("שלום");
+                Pump(window);
+                Assert.Equal("שלום", shell.Chat.PromptText);
+                Assert.Equal("rtl", composerSession.Options.Direction);
+                Assert.Equal(emptyComposerBounds, composerSession.Bounds);
+
+                composerSession.FocusAt(5);
+                var nativeFocusCount = composerSession.FocusRequestCount;
+                composerSession.SimulateText("Hello from browser", 5);
+                Pump(window);
+                Assert.Equal("Hello from browser", shell.Chat.PromptText);
+                Assert.Equal("Hello from browser", composerBox.Text);
+                Assert.Equal("ltr", composerSession.Options.Direction);
+                Assert.Equal(emptyComposerBounds, composerSession.Bounds);
+                Assert.Equal(5, composerBox.CaretIndex);
+                Assert.Equal(nativeFocusCount, composerSession.FocusRequestCount);
+                composerBox.CaretIndex = 12;
+                Pump(window);
+                Assert.Equal(12, composerSession.CaretIndex);
+                Assert.Equal(nativeFocusCount + 1, composerSession.FocusRequestCount);
+
+                shell.ShowPageCommand.Execute("Search");
+                Pump(window);
+
+                var searchBox = Assert.IsType<TextBox>(Named(window, "SearchField"));
+                var searchSession = Assert.Single(
+                    presenter.Sessions,
+                    session => session.IsShown && session.Options.Placeholder == "Search chats");
+                Assert.True(searchBox.Focusable);
+                Assert.True(searchSession.FocusRequested);
+                Assert.Equal("search", searchSession.Options.InputMode);
+                Assert.Equal(searchBox.Padding, searchSession.Options.Padding);
+                Assert.Equal(searchBox.FontSize, searchSession.Options.FontSize);
+                Assert.Equal((int)searchBox.FontWeight, searchSession.Options.FontWeight);
+                Assert.Equal(searchBox.TextAlignment.ToString().ToLowerInvariant(),
+                    searchSession.Options.TextAlignment);
+                searchSession.SimulateText("needle");
+                Pump(window);
+                Assert.Equal("needle", shell.SearchChatList.SearchText);
+                Assert.Equal("needle", searchBox.Text);
+
+                shell.Page = MobilePage.Library;
+                Pump(window);
+
+                var librarySearch = Assert.Single(
+                    presenter.Sessions,
+                    session => session.IsShown && session.Options.Placeholder == "Search");
+                librarySearch.SimulateText("agent");
+                Pump(window);
+                Assert.Equal("agent", shell.Library.SearchText);
+
+                shell.Library.IsRowActionsOpen = true;
+                Pump(window);
+                Assert.False(
+                    librarySearch.IsShown,
+                    "A modal sheet must suspend browser inputs behind its scrim.");
+                shell.Library.IsRowActionsOpen = false;
+                Pump(window);
+
+                shell.Library.IsEditing = true;
+                Pump(window);
+
+                var nameSession = Assert.Single(
+                    presenter.Sessions,
+                    session => session.IsShown && session.Options.Placeholder == "Name");
+                var bodySession = Assert.Single(
+                    presenter.Sessions,
+                    session => session.IsShown
+                               && session.Options.IsMultiline
+                               && session.Options.Placeholder.Length == 0);
+                var nameBox = Assert.IsType<TextBox>(Named(window, "EditNameBox"));
+                Assert.True(nameBox.Focus());
+                Pump(window);
+                Assert.True(nameSession.FocusRequested);
+                Assert.False(bodySession.SimulateKey(Key.Enter, KeyModifiers.Shift));
+                Assert.False(bodySession.SimulateKey(Key.Enter));
+                nameBox.AcceptsReturn = true;
+                NativeTextInputOverlay.SetForwardEnterKey(nameBox, true);
+                KeyEventArgs? editorEnter = null;
+                nameBox.AddHandler(
+                    InputElement.KeyDownEvent,
+                    (_, args) =>
+                    {
+                        if (args.Key != Key.Enter)
+                            return;
+                        editorEnter = args;
+                        args.Handled = true;
+                    },
+                    RoutingStrategies.Tunnel);
+                Assert.True(nameSession.SimulateKey(Key.Enter));
+                Assert.NotNull(editorEnter);
+                Assert.False(nameSession.SimulateKey(Key.Enter, KeyModifiers.Shift));
+                nameSession.SimulateText("Browser skill");
+                bodySession.SimulateText("Line one\nLine two");
+                Pump(window);
+
+                Assert.Equal("Browser skill", shell.Library.EditName);
+                Assert.Equal("Line one\nLine two", shell.Library.EditBody);
+                Assert.Equal("Browser skill", Named(window, "EditNameBox").GetValue(TextBox.TextProperty));
+                Assert.Equal("Line one\nLine two", Named(window, "EditBodyBox").GetValue(TextBox.TextProperty));
+
+                var chatId = Guid.NewGuid();
+                shell.Page = MobilePage.Chat;
+                shell.Chat.Reset(chatId, "Question");
+                shell.Chat.ApplyTranscript(new RemoteTranscript
+                {
+                    ChatId = chatId,
+                    Revision = 1,
+                    Turns =
+                    [
+                        new RemoteTranscriptTurn
+                        {
+                            Id = "question-turn",
+                            Items =
+                            [
+                                new RemoteTranscriptItem
+                                {
+                                    Id = "question",
+                                    Kind = RemoteProtocol.ItemKinds.Question,
+                                    Question = new RemoteQuestion
+                                    {
+                                        QuestionId = "question",
+                                        Text = "Type an answer",
+                                        Options = ["A", "B"],
+                                        AllowFreeText = true
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                });
+                Pump(window);
+
+                var questionSession = Assert.Single(
+                    presenter.Sessions,
+                    session => session.IsShown
+                               && session.Options.Placeholder == "Type your answer...");
+                questionSession.SimulateText("Custom answer");
+                Pump(window);
+                Assert.Equal(
+                    "Custom answer",
+                    Assert.IsType<TextBox>(Named(window, "PART_FreeTextBox")).Text);
+
+                shell.Page = MobilePage.Library;
+                shell.Library.IsEditing = true;
+                Layout(window, shell, 412, 500);
+                var editorScroll = Named(window, "EditNameBox")
+                    .GetVisualAncestors()
+                    .OfType<ScrollViewer>()
+                    .First();
+                editorScroll.Offset = new Vector(
+                    0,
+                    Math.Max(0, editorScroll.Extent.Height - editorScroll.Viewport.Height));
+                Pump(window);
+
+                Assert.False(
+                    nameSession.IsShown,
+                    "A scrolled-off TextBox must not leave a fixed browser input over the page.");
+                Assert.All(
+                    presenter.Sessions.Where(session => session.IsShown),
+                    session =>
+                    {
+                        Assert.InRange(session.ClipBounds.Left, 0, window.ClientSize.Width);
+                        Assert.InRange(session.ClipBounds.Top, 0, window.ClientSize.Height);
+                        Assert.InRange(session.ClipBounds.Right, 0, window.ClientSize.Width);
+                        Assert.InRange(session.ClipBounds.Bottom, 0, window.ClientSize.Height);
+                    });
+            });
+        }
+        finally
+        {
+            MobilePlatformServices.ResetTextInputOverlayPresenter(presenter);
+        }
     }
 
     [Fact]
@@ -554,6 +919,27 @@ public sealed class MobileShellViewTests
 
             // Nothing left of ours: the system back must fall through and leave the app.
             Assert.False(shell.CanGoBack);
+        });
+    }
+
+    [Fact]
+    public async Task FoldableOnboardingKeepsThePhysicalHingeClear()
+    {
+        await Run((shell, window) =>
+        {
+            Layout(window, shell, 884, 908, FoldPosture.BookVerticalHinge, 24, 430);
+
+            Assert.False(shell.IsPaired);
+            Assert.Equal(430, Named(window, "ConnectHingeLead").Bounds.Width, 1);
+            Assert.Equal(24, Named(window, "ConnectHingeGap").Bounds.Width, 1);
+            Assert.Equal(454, Named(window, "ConnectHost").Bounds.X, 1);
+            Assert.Equal(430, Named(window, "ConnectHost").Bounds.Width, 1);
+
+            Layout(window, shell, 884, 908, FoldPosture.TabletopHorizontalHinge, 24, 454);
+
+            Assert.Equal(454, Named(window, "ConnectLayout").Bounds.Height, 1);
+            Assert.Equal(0, Named(window, "ConnectHingeLead").Bounds.Width, 1);
+            Assert.Equal(884, Named(window, "ConnectHost").Bounds.Width, 1);
         });
     }
 

@@ -48,9 +48,18 @@ public sealed class RemoteMarkdownImageTests
             $"![public](https://example.com/a.png)\n![local]({local})",
             authorizedPaths);
 
-        var image = Assert.Single(descriptors!);
-        Assert.Equal(1, image.Index);
-        Assert.Equal(Path.GetFileName(local), image.FileName);
+        Assert.Collection(
+            descriptors!,
+            image =>
+            {
+                Assert.Equal(0, image.Index);
+                Assert.Equal("a.png", image.FileName);
+            },
+            image =>
+            {
+                Assert.Equal(1, image.Index);
+                Assert.Equal(Path.GetFileName(local), image.FileName);
+            });
 
         Assert.Null(RemoteMarkdownImageFiles.BuildDescriptors(
             $"![private]({Path.Combine(Path.GetTempPath(), "not-announced.png")})",
