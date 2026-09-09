@@ -56,7 +56,13 @@ public partial class ChatViewModel
             && !hasQueuedSends
             && !IsCachedSessionProviderConsistentWithSelection(chatId, session);
 
-        if (hasQueuedSends || session is null || runtime is null || !CanSteerImmediately(runtime) || sessionProviderMismatch)
+        if (hasQueuedSends
+            || session is null
+            || runtime is null
+            || !CanSteerImmediately(runtime)
+            || sessionProviderMismatch
+            || HasPendingMcpCatalogRecovery(chatId)
+            || HasMcpCatalogDegradation(chatId))
         {
             QueueSteerPrompt(chatId, prompt, queuedMessage, authorOverride, explicitAttachmentPaths);
             if (consumeComposerPrompt)
@@ -183,7 +189,18 @@ public partial class ChatViewModel
                 return true;
             }
 
-            await AwaitMcpToolCatalogRefreshAsync(chatId, token);
+            await AwaitMcpCatalogRecoveryAsync(chatId, token);
+            if (HasPendingMcpCatalogRecoveryReplay(chatId))
+            {
+                RequeueMaterializedSteerAfterMcpRecovery(chatId, prompt, userMsg, messageViewModel);
+                return true;
+            }
+            if (HasMcpCatalogDegradation(chatId))
+            {
+                RequeueMaterializedSteer(chatId, prompt, userMsg, messageViewModel);
+                return true;
+            }
+
             await session.SendAsync(sendOptions, token);
             ClearPendingExternalSkillInjections();
             return true;
@@ -331,6 +348,16 @@ public partial class ChatViewModel
         // The message has already been inserted into the transcript and owns the consumed attachment
         // payload. Passing it as `existing` preserves that instance and restores it to the queue front.
         QueueBusySendPrompt(chatId, prompt, userMessage);
+    }
+
+    private bool RequeueMaterializedSteerAfterMcpRecovery(
+        Guid chatId,
+        string prompt,
+        ChatMessage userMessage,
+        ChatMessageViewModel messageViewModel)
+    {
+        RequeueMaterializedSteer(chatId, prompt, userMessage, messageViewModel);
+        return ScheduleQueuedBusySendDrain(chatId);
     }
 
     /// <summary>

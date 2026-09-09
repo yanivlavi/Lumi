@@ -245,7 +245,6 @@ public partial class ChatViewModel
         if (_sessionCache.TryGetValue(chat.Id, out var previousSession)
             && !ReferenceEquals(previousSession, session))
         {
-            CancelMcpToolCatalogRefresh(chat.Id);
             if (!string.Equals(previousSession.SessionId, session.SessionId, StringComparison.Ordinal))
             {
                 _sessionCache.Remove(chat.Id);
@@ -282,7 +281,6 @@ public partial class ChatViewModel
         }
 
         _sessionCache[chat.Id] = session;
-        CancelMcpToolCatalogRefresh(chat.Id);
 
         // Per-session streaming state — captured by closure, independent per subscription
         ChatMessage? streamingMsg = null;
@@ -1262,6 +1260,11 @@ public partial class ChatViewModel
                     break;
 
                 case ToolExecutionCompleteEvent toolEnd:
+                    var toolMcpSessionWasLost = toolEnd.Data.Success != true
+                        && IsExactMcpSessionLoss(
+                            statusCode: null,
+                            toolEnd.Data.Error?.Code,
+                            toolEnd.Data.Error?.Message);
                     var shouldReconcileAfterTool = AdjustPendingToolCount(chat.Id, -1);
                     if (shouldReconcileAfterTool)
                         SchedulePostToolReconciliation(chat.Id);
@@ -1371,6 +1374,12 @@ public partial class ChatViewModel
                             }
                         }
                     }
+
+                    if (toolMcpSessionWasLost)
+                        TryScheduleMcpCatalogReconciliation(
+                            chat,
+                            session,
+                            McpCatalogRecoverySignal.ExactSessionLoss);
                     });
                     break;
 
@@ -1684,6 +1693,10 @@ public partial class ChatViewModel
                     break;
 
                 case SessionErrorEvent err:
+                    var errorMcpSessionWasLost = IsExactMcpSessionLoss(
+                        err.Data.StatusCode,
+                        err.Data.ErrorCode,
+                        err.Data.Message);
                     ClearManualStopRequested(chat.Id);
                     ClearPendingTurnTracking(chat.Id);
                     assistantStream.CancelPending();
@@ -1796,6 +1809,11 @@ public partial class ChatViewModel
                             ScrollToEndRequested?.Invoke();
                         }
                         QueueSaveChat(chat, saveIndex: false, releaseIfInactive: CurrentChat?.Id != chat.Id);
+                        if (errorMcpSessionWasLost)
+                            TryScheduleMcpCatalogReconciliation(
+                                chat,
+                                session,
+                                McpCatalogRecoverySignal.ExactSessionLoss);
                     });
                     break;
 
@@ -2425,6 +2443,11 @@ public partial class ChatViewModel
                     break;
 
                 case SessionMcpServerStatusChangedEvent mcpStatusChanged:
+                    Dispatcher.UIThread.Post(() =>
+                        RecordMcpProviderStatus(
+                            chat.Id,
+                            mcpStatusChanged.Data.ServerName,
+                            mcpStatusChanged.Data.Status));
                     // Live MCP lifecycle: keep the composer chip in sync as servers connect, drop, or
                     // need auth mid-conversation, and drive interactive OAuth when a remote server
                     // requests it. Fire-and-forget; the handler marshals its own UI updates.
@@ -2437,14 +2460,12 @@ public partial class ChatViewModel
                         CancellationToken.None);
                     break;
 
-                case McpToolsListChangedEvent mcpToolsChanged:
-                    // A recovered or dynamically updated MCP can change its tools after the session's
-                    // initial catalog was built. Rebuild the model-facing catalog so the new tools become
-                    // available in the next turn instead of remaining selected-but-invisible.
-                    StartMcpToolCatalogRefresh(
-                        session,
-                        chat.Id,
-                        mcpToolsChanged.Data.ServerName);
+                case McpToolsListChangedEvent:
+                    Dispatcher.UIThread.Post(() =>
+                        TryScheduleMcpCatalogReconciliation(
+                            chat,
+                            session,
+                            McpCatalogRecoverySignal.ToolsListChanged));
                     break;
 
                 case SessionPlanChangedEvent planChanged:
@@ -2684,6 +2705,7 @@ public partial class ChatViewModel
             CancelPendingQuestions(chat);
 
         ReleaseSessionResources(chatId, cancelActiveRequest: true);
+        ForgetMcpCatalogState(chatId);
         _runtimeStates.Remove(chatId);
         _pendingWorktreeCreations.Remove(chatId);
         lock (_chatLifecycleEventSync)
@@ -2711,7 +2733,6 @@ public partial class ChatViewModel
         // resume once the CLI/server recovers.
         if (_sessionCache.Remove(chat.Id, out var detachedSession))
             ReleaseMcpProxyLease(chat.Id, detachedSession);
-        CancelMcpToolCatalogRefresh(chat.Id);
         if (wasActive)
             _activeSession = null;
 
@@ -2766,6 +2787,7 @@ public partial class ChatViewModel
 
     private void ResetAfterCopilotReconnect()
     {
+        CancelAllMcpCatalogRecoveries();
         // ChatSessionStore reset the shared catalog before surfaces receive this reconnect event.
         RefreshCapabilities();
 
@@ -2799,7 +2821,6 @@ public partial class ChatViewModel
                 DetachMcpProxyLease(session)?.Dispose();
         }
         _sessionCache.Clear();
-        CancelAllMcpToolCatalogRefreshes();
         _sessionsPendingResume.Clear();
         _activeSession = null;
 
