@@ -12,6 +12,8 @@ OUT = pathlib.Path("AndroidHtmlResults")
 OUT.mkdir(exist_ok=True)
 PACKAGE = "com.lumi.mobile.preview"
 report = {"complete": False, "checks": []}
+log_stream = None
+log_file = None
 
 
 def adb(*args, binary=False):
@@ -140,6 +142,8 @@ try:
     adb("install", "-r", apk[0])
     component = adb("shell", "cmd", "package", "resolve-activity", "--brief", PACKAGE).strip().splitlines()[-1]
     adb("logcat", "-c")
+    log_file = (OUT / "logcat.txt").open("w")
+    log_stream = subprocess.Popen(["adb", "logcat"], stdout=log_file, stderr=subprocess.STDOUT)
     adb("shell", "am", "start", "-n", component, "--ez", "lumi.design_preview", "true",
         "--es", "lumi.open_file", "interactive-report.html")
     pid = wait(process_id, "Preview process", timeout=120)
@@ -173,9 +177,15 @@ try:
     report["complete"] = True
 except Exception as error:
     report["error"] = repr(error)
-    (OUT / "failure.png").write_bytes(adb("exec-out", "screencap", "-p", binary=True))
+    try:
+        (OUT / "failure.png").write_bytes(adb("exec-out", "screencap", "-p", binary=True))
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as capture_error:
+        report["capture_error"] = repr(capture_error)
     raise
 finally:
+    if log_stream is not None:
+        log_stream.terminate()
+        log_stream.wait(timeout=15)
+        log_file.close()
     (OUT / "report.json").write_text(json.dumps(report, indent=2))
-    (OUT / "logcat.txt").write_text(adb("logcat", "-d"), errors="replace")
     print(json.dumps(report, indent=2))

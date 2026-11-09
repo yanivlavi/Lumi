@@ -7,7 +7,7 @@ permissions:
   actions: read
 jobs:
   android:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +33,7 @@ jobs:
           arch: x86_64
           target: google_apis
           profile: pixel_7
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -memory 2048 -cores 2 -camera-back none -camera-front none
+          emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim -memory 2048 -cores 2 -camera-back none -camera-front none
           disable-animations: true
           script: python tools/pr48_android_html_check.py
       - name: Retain runner diagnostics
