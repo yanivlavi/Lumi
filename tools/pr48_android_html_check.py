@@ -17,6 +17,13 @@ report = {"complete": False, "checks": []}
 def adb(*args, binary=False):
     return subprocess.check_output(["adb", *args], text=not binary, timeout=45)
 
+def process_id():
+    result = subprocess.run(["adb", "shell", "pidof", PACKAGE], capture_output=True,
+                            text=True, timeout=10)
+    if result.returncode not in (0, 1):
+        result.check_returncode()
+    return result.stdout.strip()
+
 
 def wait(test, description, timeout=45):
     deadline = time.monotonic() + timeout
@@ -110,7 +117,7 @@ def verify_open(label):
 
 def verify_closed(pid, old_target, label):
     wait(lambda: all(item["id"] != old_target for item in targets()), "WebView destroyed")
-    assert adb("shell", "pidof", PACKAGE).strip() == pid, "Preview app crashed or restarted"
+    assert process_id() == pid, "Preview app crashed or restarted"
     report["checks"].append(label + ": same process alive, old WebView target destroyed")
 
 
@@ -123,7 +130,7 @@ try:
     adb("logcat", "-c")
     adb("shell", "am", "start", "-n", component, "--ez", "lumi.design_preview", "true",
         "--es", "lumi.open_file", "interactive-report.html")
-    pid = wait(lambda: adb("shell", "pidof", PACKAGE).strip(), "Preview process")
+    pid = wait(process_id, "Preview process", timeout=120)
     adb("forward", "tcp:9222", "localabstract:webview_devtools_remote_" + pid)
     old_target = verify_open("initial")
     snapshot("01-html-open")
@@ -145,7 +152,7 @@ try:
     report["complete"] = True
 except Exception as error:
     report["error"] = repr(error)
-    snapshot("failure")
+    (OUT / "failure.png").write_bytes(adb("exec-out", "screencap", "-p", binary=True))
     raise
 finally:
     (OUT / "report.json").write_text(json.dumps(report, indent=2))
