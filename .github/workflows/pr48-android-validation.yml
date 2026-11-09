@@ -31,9 +31,9 @@ jobs:
         with:
           api-level: 35
           arch: x86_64
-          target: google_apis
+          target: default
           profile: pixel_7
-          emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim -memory 2048 -cores 2 -camera-back none -camera-front none
+          emulator-options: -no-window -gpu swiftshader -feature -Vulkan -no-snapshot -noaudio -no-boot-anim -memory 4096 -cores 4 -camera-back none -camera-front none
           disable-animations: true
           script: python tools/pr48_android_html_check.py
       - name: Retain runner diagnostics

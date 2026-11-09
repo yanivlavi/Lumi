@@ -149,6 +149,7 @@ try:
     pid = wait(process_id, "Preview process", timeout=120)
     adb("forward", "tcp:9222", "localabstract:webview_devtools_remote_" + pid)
     old_target = verify_open("initial")
+    snapshot("01-html-open")
     adb("shell", "input", "keyevent", "4")
     verify_closed(pid, old_target, "Android Back")
     snapshot("02-after-back")
