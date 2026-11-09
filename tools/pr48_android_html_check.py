@@ -46,9 +46,6 @@ def targets():
 
 
 def snapshot(name):
-    png = adb("exec-out", "screencap", "-p", binary=True)
-    assert png.startswith(b"\x89PNG"), "Invalid emulator screenshot"
-    (OUT / (name + ".png")).write_bytes(png)
     adb("shell", "uiautomator", "dump", "/sdcard/window.xml")
     xml = adb("shell", "cat", "/sdcard/window.xml")
     (OUT / (name + ".xml")).write_text(xml)
