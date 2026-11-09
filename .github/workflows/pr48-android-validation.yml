@@ -1,0 +1,51 @@
+name: PR48 Android HTML runtime
+on:
+  push:
+    branches: [validation/pr48-android-lifetime]
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 11.0.x
+          dotnet-quality: preview
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: dotnet workload install android
+      - name: Build unmodified standalone Preview APK
+        run: |
+          dotnet build src/Lumi.Mobile.Android/Lumi.Mobile.Android.csproj -c Debug -f net10.0-android -r android-x64 -p:LumiPreview=true -p:EmbedAssembliesIntoApk=true -p:AndroidSdkDirectory="$ANDROID_HOME" -p:JavaSdkDirectory="$JAVA_HOME" -p:AcceptAndroidSDKLicenses=True -t:InstallAndroidDependencies
+          dotnet build src/Lumi.Mobile.Android/Lumi.Mobile.Android.csproj -c Debug -f net10.0-android -r android-x64 -p:LumiPreview=true -p:EmbedAssembliesIntoApk=true -p:AndroidSdkDirectory="$ANDROID_HOME" -p:JavaSdkDirectory="$JAVA_HOME"
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Python WebSocket support
+        run: python -c "import websocket" || python -m pip install websocket-client
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_7
+          disable-animations: true
+          script: python tools/pr48_android_html_check.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-html-runtime
+          path: |
+            AndroidHtmlResults/
+            src/Lumi.Mobile.Android/bin/Debug/net10.0-android/**/*-Signed.apk
+          if-no-files-found: warn
+          retention-days: 7
