@@ -44,7 +44,9 @@ def targets():
 
 
 def snapshot(name):
-    (OUT / (name + ".png")).write_bytes(adb("exec-out", "screencap", "-p", binary=True))
+    png = adb("exec-out", "screencap", "-p", binary=True)
+    assert png.startswith(b"\x89PNG"), "Invalid emulator screenshot"
+    (OUT / (name + ".png")).write_bytes(png)
     adb("shell", "uiautomator", "dump", "/sdcard/window.xml")
     xml = adb("shell", "cat", "/sdcard/window.xml")
     (OUT / (name + ".xml")).write_text(xml)
@@ -130,9 +132,11 @@ def verify_closed(pid, old_target, label):
 
 
 try:
-    apk = glob.glob("src/Lumi.Mobile.Android/bin/Debug/net10.0-android/**/*-Signed.apk",
+    apk = glob.glob(".candidate-apk/src/Lumi.Mobile.Android/bin/Debug/net10.0-android/**/*-Signed.apk",
                     recursive=True)
     assert len(apk) == 1, apk
+    adb("shell", "wm", "size", "824x1784")
+    adb("shell", "wm", "density", "320")
     adb("install", "-r", apk[0])
     component = adb("shell", "cmd", "package", "resolve-activity", "--brief", PACKAGE).strip().splitlines()[-1]
     adb("logcat", "-c")
@@ -141,7 +145,6 @@ try:
     pid = wait(process_id, "Preview process", timeout=120)
     adb("forward", "tcp:9222", "localabstract:webview_devtools_remote_" + pid)
     old_target = verify_open("initial")
-    snapshot("01-html-open")
     adb("shell", "input", "keyevent", "4")
     verify_closed(pid, old_target, "Android Back")
     snapshot("02-after-back")
@@ -157,6 +160,16 @@ try:
         old_target = verify_open(f"reopen {iteration + 1}")
         assert tap_node("Back", f"close-{iteration}"), "Preview Back button not found"
         verify_closed(pid, old_target, f"UI Back {iteration + 1}")
+    adb("shell", "wm", "size", "1600x1400")
+    adb("shell", "wm", "density", "240")
+    assert wait(lambda: tap_node("interactive-report.html", "tablet-file"), "tablet HTML chip")
+    old_target = verify_open("two-pane preview")
+    assert tap_node("fold-layout-metrics.csv", "switch-to-csv"), "CSV file chip not found"
+    verify_closed(pid, old_target, "switch HTML to CSV")
+    assert tap_node("interactive-report.html", "switch-to-html"), "HTML chip not found"
+    old_target = verify_open("switch CSV to HTML")
+    assert tap_node("Close preview", "tablet-close"), "Close preview button not found"
+    verify_closed(pid, old_target, "two-pane Close preview")
     report["complete"] = True
 except Exception as error:
     report["error"] = repr(error)
