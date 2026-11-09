@@ -80,8 +80,15 @@ class Cdp:
             message = json.loads(self.ws.recv())
             if message.get("method") == "Runtime.executionContextCreated":
                 self.contexts.append(message["params"]["context"]["id"])
+            elif message.get("method") == "Runtime.executionContextsCleared":
+                self.contexts.clear()
+            elif message.get("method") == "Runtime.executionContextDestroyed":
+                context = message["params"]["executionContextId"]
+                self.contexts = [item for item in self.contexts if item != context]
             if message.get("id") == self.id:
                 if "error" in message:
+                    if message["error"].get("message") == "Cannot find context with specified id":
+                        return {}
                     raise AssertionError(message["error"])
                 return message.get("result", {})
 
@@ -93,7 +100,8 @@ class Cdp:
         return result.get("result", {}).get("value")
 
     def verify_html(self):
-        for context in self.contexts:
+        self.call("Runtime.evaluate", {"expression": "0"})
+        for context in list(self.contexts):
             content = self.evaluate("document.body ? document.body.innerText : ''", context)
             if content and "End of the complete HTML file." in content:
                 assert len(content) > 120000, len(content)
