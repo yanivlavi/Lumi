@@ -3546,6 +3546,7 @@ public sealed class LumiRemoteServer : IAsyncDisposable
             Role = message.Role,
             Content = message.Content,
             Author = message.Author,
+            RemoteRequestId = message.RemoteRequestId,
             Timestamp = message.Timestamp,
             ToolName = message.ToolName,
             ToolCallId = message.ToolCallId,
@@ -3591,7 +3592,8 @@ public sealed class LumiRemoteServer : IAsyncDisposable
                 Description = skill.Description,
                 Content = skill.Content
             })],
-            SteerDelivery = message.SteerDelivery
+            SteerDelivery = message.SteerDelivery,
+            CanSendNowWhenQueued = message.CanSendNowWhenQueued
         };
 
     private static T? Deserialize<T>(string body, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo)
